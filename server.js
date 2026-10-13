@@ -62,10 +62,12 @@ const STARTER = [
   { unit: 'Lesson 9', question: 'The toy store is ___ the bus stop. (바로 앞에)', options: ['behind', 'in front of', 'between', 'under'], answer: 2, level: 'medium', explanation: 'in front of = ~ 앞에' }
 ];
 let bank = STARTER.slice();
+const BASE_NAME = '기본 문제 — 영어 9단원 길찾기';
 
 /* ---------- 방 보관 ---------- */
 const rooms = new Map();
-const classes = new Map();         // 수업 코드 → { code, name, bank, createdAt }
+const classes = new Map();         // 문제 세트 코드 → { code, name, bank, createdAt, builtin }
+let activeSet = 'BASE';            // 학생이 그냥 주소로 들어왔을 때 쓰는 세트
 const timers = new Map();          // code → setTimeout 핸들 (저장 대상 아님)
 
 function newCode() { let c; do { c = crypto.randomBytes(3).toString('hex').toUpperCase(); } while (rooms.has(c)); return c; }
@@ -111,6 +113,7 @@ function view(r, forTeacher) {
 function push(r) {
   io.to(r.code).emit('state', view(r));
   io.to('teachers').emit('rooms', summaries());
+  io.to('teachers').emit('sets', setList());
   dirty = true;
 }
 function summaries() {
@@ -439,7 +442,7 @@ io.on('connection', s => {
   s.on('create', ({ name, mode, pieceCount, classCode }, ack) => {
     name = String(name || '').trim().slice(0, 12);
     if (!name) return fail(ack, '이름을 입력하세요.');
-    const cls = classCode ? classes.get(String(classCode).toUpperCase()) : null;
+    const cls = classes.get(String(classCode || activeSet).toUpperCase()) || classes.get('BASE');
     const code = newCode(), id = crypto.randomUUID();
     const full = mode === 'full';
     const r = {
@@ -675,7 +678,7 @@ io.on('connection', s => {
   s.on('teacher:login', ({ pin }, ack) => {
     if (String(pin) !== PIN) return fail(ack, '교사 PIN이 다릅니다.');
     s.data.teacher = true; s.join('teachers');
-    done(ack, { rooms: summaries(), augments: AUG, bankCount: bank.length, classes: [...classes.values()].map(c => ({ code: c.code, name: c.name, count: c.bank.length })) });
+    done(ack, { rooms: summaries(), augments: AUG, sets: setList() });
   });
   s.on('teacher:watch', ({ code }, ack) => {
     if (!s.data.teacher) return fail(ack, '권한이 없습니다.');
@@ -768,7 +771,10 @@ app.post('/api/questions',
         push(rooms.get(code));
       } else {
         bank = questions;
+        const cur = classes.get(activeSet);
+        if (cur && !cur.builtin) cur.bank = questions;
       }
+      io.to('teachers').emit('sets', setList());
       res.json({
         ok: true, count: questions.length, scope: code || 'all',
         units: [...new Set(questions.map(q => q.unit).filter(Boolean))],
@@ -777,6 +783,76 @@ app.post('/api/questions',
       });
     } catch (e) { res.status(400).json({ error: '엑셀을 읽지 못했습니다: ' + e.message }); }
   });
+
+/* 엑셀 기초 양식 내려받기 */
+app.get('/api/template.xlsx', (_, res) => {
+  const head = ['unit', 'question', 'option1', 'option2', 'option3', 'option4', 'answer', 'level', 'explanation'];
+  const rows = [
+    head,
+    ['Lesson 9', 'How can I get to the museum?', 'Take Bus Number 7.', 'It is delicious.', 'I am eleven.', 'She is tall.', 1, 'easy', '교통수단을 묻는 말에는 Take ~ 로 답합니다.'],
+    ['Lesson 9', 'Get off ___ the station.', 'in', 'at', 'on', 'under', 2, 'easy', 'get off at + 장소'],
+    ['Lesson 9', 'The bank is ___ the school. (학교 뒤에)', 'behind', 'between', 'next to', 'in front of', 1, 'easy', 'behind = ~ 뒤에'],
+    ['Lesson 9', 'The shop is ___ the bank and the park.', 'behind', 'under', 'between', 'next', 3, 'medium', 'between A and B = A와 B 사이에'],
+    ['', '', '', '', '', '', '', '', '']
+  ];
+  const guide = [
+    ['작성 방법'],
+    [''],
+    ['1. 첫 줄(열 제목)은 그대로 두세요. 한글 제목도 됩니다:'],
+    ['   단원명 / 영어 문제 / 선택지 1 / 선택지 2 / 선택지 3 / 선택지 4 / 정답 번호 / 난이도 / 해설'],
+    ['2. 한 줄에 문제 하나씩 씁니다. 줄 수는 제한이 없습니다.'],
+    ['3. answer(정답 번호)는 1~4 중 하나입니다. 몇 번째 선택지가 정답인지 적습니다.'],
+    ['4. level(난이도)은 easy / medium / hard 중 하나입니다. 문제 위에 표시됩니다.'],
+    ['5. explanation(해설)은 채점이 끝난 뒤에만 학생에게 보입니다. 비워도 됩니다.'],
+    ['6. 선택지 네 칸을 모두 채워야 합니다. 비어 있으면 그 줄은 건너뜁니다.'],
+    [''],
+    ['문제는 15~30개쯤이면 한 차시에 넉넉합니다.']
+  ];
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = [{ wch: 10 }, { wch: 38 }, { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 9 }, { wch: 8 }, { wch: 34 }];
+  XLSX.utils.book_append_sheet(wb, ws, 'Questions');
+  const ws2 = XLSX.utils.aoa_to_sheet(guide);
+  ws2['!cols'] = [{ wch: 80 }];
+  XLSX.utils.book_append_sheet(wb, ws2, '작성 안내');
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', 'attachment; filename="yut_questions_template.xlsx"');
+  res.send(buf);
+});
+
+/* 문제 세트 목록 */
+function setList() {
+  const counts = {};
+  for (const r of rooms.values()) counts[r.classCode || activeSet] = (counts[r.classCode || activeSet] || 0) + 1;
+  return [...classes.values()]
+    .sort((a, b) => (b.builtin ? 1 : 0) - (a.builtin ? 1 : 0) || a.createdAt - b.createdAt)
+    .map(c => ({ code: c.code, name: c.name, count: c.bank.length, builtin: !!c.builtin, active: c.code === activeSet, rooms: counts[c.code] || 0 }));
+}
+
+/* 세트를 '지금 적용'으로 */
+app.post('/api/class/:code/activate', (req, res) => {
+  if (req.header('x-teacher-pin') !== PIN) return res.status(403).json({ error: '교사 인증 실패' });
+  const c = classes.get(String(req.params.code || '').toUpperCase());
+  if (!c) return res.status(404).json({ error: '문제 세트를 찾을 수 없습니다.' });
+  activeSet = c.code; bank = c.bank; dirty = true;
+  io.to('teachers').emit('sets', setList());
+  res.json({ ok: true, code: c.code, name: c.name, count: c.bank.length });
+});
+
+/* 세트 지우기 (기본 문제는 지울 수 없다) */
+app.delete('/api/class/:code', (req, res) => {
+  if (req.header('x-teacher-pin') !== PIN) return res.status(403).json({ error: '교사 인증 실패' });
+  const code = String(req.params.code || '').toUpperCase();
+  const c = classes.get(code);
+  if (!c) return res.status(404).json({ error: '문제 세트를 찾을 수 없습니다.' });
+  if (c.builtin) return res.status(400).json({ error: '기본 문제는 지울 수 없습니다.' });
+  classes.delete(code);
+  if (activeSet === code) { activeSet = 'BASE'; bank = classes.get('BASE').bank; }
+  dirty = true;
+  io.to('teachers').emit('sets', setList());
+  res.json({ ok: true });
+});
 
 /* 수업 만들기 — 교사가 문제은행과 함께 수업을 만들고 링크를 받는다 */
 app.post('/api/class',
@@ -801,6 +877,7 @@ app.post('/api/class',
     let code; do { code = crypto.randomBytes(2).toString('hex').toUpperCase(); } while (classes.has(code));
     classes.set(code, { code, name, bank: questions, createdAt: Date.now() });
     dirty = true;
+    io.to('teachers').emit('sets', setList());
     res.json({ ok: true, code, name, count: questions.length, skipped: skipped.slice(0, 10) });
   });
 
@@ -829,7 +906,7 @@ function save() {
   try {
     fs.mkdirSync(SAVE_DIR, { recursive: true });
     const data = [...rooms.values()].map(r => ({ ...r, players: r.players.map(p => ({ ...p, sid: null })) }));
-    fs.writeFileSync(SAVE_FILE, JSON.stringify({ savedAt: Date.now(), bank, classes: [...classes.values()], rooms: data }));
+    fs.writeFileSync(SAVE_FILE, JSON.stringify({ savedAt: Date.now(), bank, activeSet, classes: [...classes.values()], rooms: data }));
   } catch (e) {
     saveOff = true;
     console.warn('저장을 끕니다 (디스크에 쓸 수 없는 환경):', e.message);
@@ -842,6 +919,7 @@ function load() {
     const d = JSON.parse(fs.readFileSync(SAVE_FILE, 'utf8'));
     if (Array.isArray(d.bank) && d.bank.length) bank = d.bank;
     for (const c of d.classes || []) classes.set(c.code, c);
+    if (d.activeSet) activeSet = d.activeSet;
     for (const r of d.rooms || []) {
       r.players.forEach(p => { p.sid = null; });
       r.pending = null; r.roll = null; r.chooseQueue = [];
@@ -854,6 +932,12 @@ setInterval(save, 4000);
 process.on('SIGINT', () => { dirty = true; save(); process.exit(0); });
 
 load();
+/* 기본 문제 세트는 언제나 있어야 한다 */
+if (!classes.has('BASE')) classes.set('BASE', { code: 'BASE', name: BASE_NAME, bank: STARTER.slice(), createdAt: 0, builtin: true });
+else { const b = classes.get('BASE'); b.builtin = true; b.name = b.name || BASE_NAME; }
+if (!classes.has(activeSet)) activeSet = 'BASE';
+bank = classes.get(activeSet).bank;
+
 server.listen(PORT, '0.0.0.0', () => {
   const host = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
   console.log(`\n  English Yut Battle 2차 버전`);
