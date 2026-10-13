@@ -162,6 +162,18 @@ input::placeholder{color:#b9a68a}
 .rollResult .mv{font-size:13px;color:var(--ink2)}
 @keyframes pop{0%{opacity:0;transform:scale(.4) rotate(-10deg)}70%{opacity:1;transform:scale(1.12)}100%{opacity:1;transform:scale(1)}}
 
+/* ---------- 수업 배너 · 계속 버튼 ---------- */
+.classBanner{background:#FFF1D6;border:3px solid var(--yellow);border-radius:18px;padding:13px 16px;margin:14px 0 4px;text-align:center}
+.classBanner b{font-family:var(--display);font-size:19px;display:block;color:#8A6318}
+.classBanner span{font-size:13px;color:var(--ink2)}
+.battleActs{margin-top:14px;display:flex;justify-content:center}
+.battleActs .btn{min-width:200px}
+.classOut{background:#EAF7EF;border:3px solid var(--green);border-radius:16px;padding:14px;margin-top:12px}
+.classOut .url{display:block;background:#fff;border:2px solid var(--line);border-radius:12px;padding:11px 13px;
+  font-size:15px;word-break:break-all;margin:8px 0;font-weight:700}
+.classRow{display:flex;align-items:center;gap:9px;border-bottom:1px dotted #e4d8c0;padding:7px 0;font-size:13.5px;flex-wrap:wrap}
+.classRow .nm{flex:1;font-weight:700;min-width:120px}
+
 /* ---------- 겹쳐 뜨는 창 ---------- */
 .ov{position:fixed;inset:0;background:#3b2e23cc;z-index:60;display:flex;align-items:center;justify-content:center;padding:16px}
 /* hidden 속성이 클래스보다 약해서 창이 안 닫히던 문제를 막는다 */

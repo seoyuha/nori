@@ -24,6 +24,9 @@ let tickTimer = null;
 let animating = null;                // 말 이동 애니메이션 중인 좌표
 
 try { me = JSON.parse(localStorage.getItem('yutMe') || 'null'); } catch (e) { }
+/* 주소에 붙은 수업 코드 — 예: .../?class=A1B2  또는  .../#A1B2 */
+let CLASS = null;
+const clsParam = (new URLSearchParams(location.search).get('class') || location.hash.replace('#', '')).toUpperCase().trim();
 
 /* ---------- 작은 도구 ---------- */
 function show(name) {
@@ -68,7 +71,7 @@ $('btnCreate').onclick = () => {
   const name = $('myName').value.trim();
   if (!name) return toast('이름을 먼저 써 주세요.');
   localStorage.setItem('yutName', name);
-  send('create', { name, mode, pieceCount: +$('pieceCount').value }, res => {
+  send('create', { name, mode, pieceCount: +$('pieceCount').value, classCode: CLASS?.code }, res => {
     if (res?.ok) { me = { code: res.code, id: res.id }; localStorage.setItem('yutMe', JSON.stringify(me)); }
   });
 };
@@ -234,6 +237,8 @@ function renderWait() {
   show('waiting');
   $('waitCode').textContent = S.code;
   $('waitMode').textContent = S.mode === 'full' ? '🔥 본격 증강' : '🌱 간편 수업';
+  $('waitClass').textContent = S.className ? '📚 ' + S.className : '';
+  $('waitClass').hidden = !S.className;
   let html = '';
   for (let i = 0; i < 5; i++) {
     const p = S.players[i];
@@ -289,6 +294,12 @@ function renderMe() {
     }
     if (p.doubleNext) h += `<p class="empty">✨ 다음 이동은 두 배!</p>`;
     if (p.fate) h += `<p class="empty">🔮 운명의 윷을 예약했어요.</p>`;
+    // 방장은 멈춰 있는 친구의 차례를 넘길 수 있다
+    if (S.host === me?.id && !my && !S.pending && S.status === 'playing' && !S.paused) {
+      const t = S.players[S.turn];
+      h += `<button class="btn ghost sm" id="btnSkipTurn" style="width:100%;margin-top:10px">
+        ⏭️ ${esc(t?.name || '')} 차례 넘기기${t && !t.connected ? ' (연결 끊김)' : ''}</button>`;
+    }
   }
   $('mePanel').innerHTML = h;
 
@@ -298,6 +309,8 @@ function renderMe() {
     b.onclick = () => send('move', { piece: +b.dataset.piece }));
   $('mePanel').querySelectorAll('[data-aug]').forEach(b =>
     b.onclick = () => openAbility(b.dataset.aug));
+  const sk = $('btnSkipTurn');
+  if (sk) sk.onclick = () => { sk.disabled = true; send('skipTurn', {}); };
 }
 
 function renderRoster() {
@@ -366,6 +379,7 @@ function openBattle(p) {
     send('answer', { index: +b.dataset.i });
   });
   $('qReveal').hidden = true;
+  $('battleActs').innerHTML = '';
   $('ovBattle').hidden = false;
   startTick(p.deadline, $('battleTimer'));
   updateBattle(p);
@@ -379,9 +393,8 @@ function updateBattle(p) {
   $('whoAnswered').innerHTML = list.map(x =>
     `<span class="${p.answered.includes(x.id) ? 'done' : ''}">${x.animal} ${esc(x.name)}${p.answered.includes(x.id) ? ' ✓' : ' …'}</span>`).join('');
 
+  const acts = $('battleActs');
   if (p.answer) {
-    stopTick();
-    $('battleTimer').textContent = '';
     const right = p.answer - 1;
     $('qOpts').querySelectorAll('.opt').forEach((b, i) => {
       b.disabled = true;
@@ -393,6 +406,23 @@ function updateBattle(p) {
       `<b>정답: ${p.answer}번 — ${esc(p.question.options[right])}</b>` +
       (p.explanation ? `<br>${esc(p.explanation)}` : '') +
       (p.result ? `<br><br>${esc(p.result.text)}` : '');
+    if (p.canContinue) {
+      startTick(p.deadline, $('battleTimer'));
+      if (!acts.querySelector('[data-go]')) {
+        acts.innerHTML = `<button class="btn big" data-go="1">계속 ▶</button>`;
+        acts.querySelector('[data-go]').onclick = e => { e.target.disabled = true; send('continue', {}); };
+      }
+    }
+  } else {
+    // 아직 채점 전 — 방장은 기다리지 않고 바로 채점할 수 있다
+    const amHost = S.host === me?.id;
+    const waiting = list.filter(x => !p.answered.includes(x.id)).length;
+    if (amHost && waiting > 0 && answered) {
+      if (!acts.querySelector('[data-grade]')) {
+        acts.innerHTML = `<button class="btn alt" data-grade="1">⏩ 기다리지 않고 바로 채점</button>`;
+        acts.querySelector('[data-grade]').onclick = e => { e.target.disabled = true; send('gradeNow', {}); };
+      }
+    } else if (!amHost || !answered) acts.innerHTML = '';
   }
 }
 
@@ -507,8 +537,9 @@ $('btnTeacher').onclick = () => {
     if (!res?.ok) return;
     teacherOn = true; teacherPin = pin; AUG = res.augments || AUG;
     show('teacher');
-    $('teacherInfo').textContent = `문제은행 ${res.bankCount}문제`;
+    $('teacherInfo').textContent = `문제은행 ${res.bankCount}문제 · 수업 ${res.classes?.length || 0}개`;
     renderRooms(res.rooms);
+    renderClassList(res.classes);
   });
 };
 $('btnTeacherOut').onclick = () => { teacherOn = false; show('landing'); };
@@ -618,7 +649,76 @@ function drawTeacherWatch() {
   renderPending();
 }
 
+/* ============================================================
+   수업 (교사가 만든 링크)
+   ============================================================ */
+async function loadClass() {
+  if (!clsParam) return;
+  try {
+    const r = await fetch('/api/class/' + encodeURIComponent(clsParam));
+    const d = await r.json();
+    if (!r.ok) { $('classBanner').hidden = false; $('classBanner').innerHTML = `<b>수업을 찾을 수 없어요</b><span>${esc(d.error || '')}</span>`; return; }
+    CLASS = d;
+    $('classBanner').hidden = false;
+    $('classBanner').innerHTML = `<b>📚 ${esc(d.name)}</b><span>이 수업의 문제 ${d.count}개로 게임해요 · 모둠끼리 방을 만드세요</span>`;
+  } catch (e) { }
+}
+
+$('btnMakeClass').onclick = async () => {
+  const name = $('className').value.trim() || '영어 수업';
+  const f = $('classFile').files[0];
+  const out = $('classOut');
+  out.innerHTML = '<p class="hint">만드는 중…</p>';
+  try {
+    const body = f ? await f.arrayBuffer() : new ArrayBuffer(0);
+    const res = await fetch('/api/class?name=' + encodeURIComponent(name), {
+      method: 'POST', headers: { 'x-teacher-pin': teacherPin }, body
+    });
+    const d = await res.json();
+    if (!res.ok) {
+      out.innerHTML = `<p class="hint">❌ ${esc(d.error)}<br>${esc(d.hint || '')}` +
+        (d.skipped?.length ? `<br>건너뛴 줄: ${esc(d.skipped.join(' / '))}` : '') + '</p>';
+      return;
+    }
+    const url = location.origin + '/?class=' + d.code;
+    out.innerHTML = `<div class="classOut">
+      <b>✅ ${esc(d.name)} — 문제 ${d.count}개</b>
+      <span class="url" id="classUrl">${esc(url)}</span>
+      <div class="row">
+        <button class="btn sm" id="btnCopyUrl">주소 복사</button>
+        <button class="btn sm alt" id="btnOpenUrl">새 창에서 열어 보기</button>
+      </div>
+      <p class="hint">이 주소를 반 전체에 알려 주세요. 학생들이 들어가 모둠별로 방을 만듭니다.</p>
+      ${d.skipped?.length ? `<p class="hint">⚠️ 건너뛴 줄: ${esc(d.skipped.join(' / '))}</p>` : ''}
+    </div>`;
+    $('btnCopyUrl').onclick = async () => {
+      try { await navigator.clipboard.writeText(url); toast('주소를 복사했어요.'); }
+      catch (e) { const r = document.createRange(); r.selectNode($('classUrl')); getSelection().removeAllRanges(); getSelection().addRange(r); toast('주소를 길게 눌러 복사하세요.'); }
+    };
+    $('btnOpenUrl').onclick = () => window.open(url, '_blank');
+    loadClassList();
+  } catch (e) { out.innerHTML = `<p class="hint">❌ ${esc(e.message)}</p>`; }
+};
+
+function renderClassList(list) {
+  if (!list || !list.length) { $('classList').innerHTML = ''; return; }
+  $('classList').innerHTML = `<h3 class="pt" style="margin-top:14px">만들어 둔 수업</h3>` + list.map(c => {
+    const url = location.origin + '/?class=' + c.code;
+    return `<div class="classRow"><span class="nm">${esc(c.name)}</span>
+      <span class="muted">문제 ${c.count}개</span>
+      <button class="btn sm ghost" data-copy="${esc(url)}">주소 복사</button></div>`;
+  }).join('');
+  $('classList').querySelectorAll('[data-copy]').forEach(b => b.onclick = async () => {
+    try { await navigator.clipboard.writeText(b.dataset.copy); toast('주소를 복사했어요.'); }
+    catch (e) { prompt('이 주소를 복사하세요', b.dataset.copy); }
+  });
+}
+function loadClassList() {
+  send('teacher:login', { pin: teacherPin }, res => { if (res?.ok) renderClassList(res.classes); });
+}
+
 /* ---------- 시작 ---------- */
+loadClass();
 buildStrip();
 $('myName').value = localStorage.getItem('yutName') || '';
 fetch('/api/info').then(r => r.json()).then(d => { AUG = d.augments; });

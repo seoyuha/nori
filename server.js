@@ -26,7 +26,7 @@ const SAVE_FILE = path.join(SAVE_DIR, 'rooms.json');
 let saveOff = false;        // 디스크에 쓸 수 없는 환경이면 한 번만 알리고 끈다
 
 /* ---------- 시간 제한 (ms) ---------- */
-const T = { battle: 20000, capture: 15000, turn: 60000, choose: 25000 };
+const T = { battle: 15000, capture: 12000, turn: 40000, choose: 15000, reveal: 6000 };
 
 /* ---------- 증강 ---------- */
 const AUG = [
@@ -65,6 +65,7 @@ let bank = STARTER.slice();
 
 /* ---------- 방 보관 ---------- */
 const rooms = new Map();
+const classes = new Map();         // 수업 코드 → { code, name, bank, createdAt }
 const timers = new Map();          // code → setTimeout 핸들 (저장 대상 아님)
 
 function newCode() { let c; do { c = crypto.randomBytes(3).toString('hex').toUpperCase(); } while (rooms.has(c)); return c; }
@@ -88,11 +89,13 @@ function view(r, forTeacher) {
       pending.attacker = p.attacker || null;
       pending.defender = p.defender || null;
       if (p.revealed) { pending.answer = p.q.answer; pending.explanation = p.q.explanation; pending.result = p.result; }
+      pending.canContinue = !!p.canContinue;
     }
     if (p.kind === 'choose') { pending.player = p.player; pending.choices = p.choices; }
   }
   return {
     code: r.code, mode: r.mode, status: r.status, paused: r.paused,
+    classCode: r.classCode || null, className: r.className || null,
     turn: r.turn, roll: r.roll, extra: r.extra, winner: r.winner, host: r.host,
     traps: r.traps, quizEvery: r.quizEvery, turnDeadline: r.turnDeadline,
     anim: r.anim || null,
@@ -113,6 +116,7 @@ function push(r) {
 function summaries() {
   return [...rooms.values()].map(r => ({
     code: r.code, mode: r.mode, status: r.status, paused: r.paused,
+    className: r.className || null, classCode: r.classCode || null,
     turnName: cur(r)?.name || '-', winner: r.winner,
     minutes: Math.round((Date.now() - r.createdAt) / 60000),
     players: r.players.map(p => ({
@@ -157,14 +161,26 @@ function armTurnTimer(r) {
 
 function advance(r) {
   if (r.status !== 'playing') { push(r); return; }
-  if (r.extra > 0) {
+  if (r.extra > 0 && cur(r)?.sid) {
     r.extra--;
     r.roll = null; r.anim = null;
     r.turnDeadline = Date.now() + T.turn;
     log(r, `${cur(r).name} 한 번 더!`);
     push(r); armTurnTimer(r);
   } else {
-    r.turn = (r.turn + 1) % r.players.length;
+    r.extra = 0;
+    // 접속이 끊긴 학생의 차례는 건너뛴다 (모두 끊겼으면 그대로 둔다)
+    const n = r.players.length;
+    let step = 1, skipped = [];
+    while (step <= n) {
+      const cand = r.players[(r.turn + step) % n];
+      if (cand.sid) break;
+      skipped.push(cand.name);
+      step++;
+    }
+    if (step > n) step = 1;                       // 아무도 접속 안 됨
+    r.turn = (r.turn + step) % n;
+    if (skipped.length) log(r, `⏭️ ${skipped.join(', ')} 연결이 끊겨 건너뜁니다`);
     startTurn(r);
   }
 }
@@ -211,17 +227,24 @@ function resolveBattle(r) {
   else log(r, `${thrower.name} 오답 — 증강 없이 윷만 던집니다`);
   if (right[0] && right[0] !== p.thrower) log(r, `⚡ ${byId(r, right[0]).name} 가장 빠른 정답! 보너스 증강`);
 
+  // '계속'을 누르면 바로, 아무도 안 누르면 잠시 뒤 자동으로 넘어간다
+  p.canContinue = true;
+  p.deadline = Date.now() + T.reveal;
   push(r);
+  setTimer(r, T.reveal, () => continueBattle(r));
+}
 
-  // 해설을 2.5초 보여 준 뒤 다음 단계로
-  setTimer(r, 2500, () => {
-    const queue = [];
-    if (throwerRight) queue.push({ pid: p.thrower, bonus: false });
-    if (right[0] && right[0] !== p.thrower) queue.push({ pid: right[0], bonus: true });
-    r.chooseQueue = queue;
-    r.pending = null;
-    nextChoose(r);
-  });
+function continueBattle(r) {
+  const p = r.pending;
+  if (!p || p.kind !== 'battle' || !p.revealed) return;
+  clearTimer(r);
+  const right = p.result?.right || [];
+  const queue = [];
+  if (right.includes(p.thrower)) queue.push({ pid: p.thrower, bonus: false });
+  if (right[0] && right[0] !== p.thrower) queue.push({ pid: right[0], bonus: true });
+  r.chooseQueue = queue;
+  r.pending = null;
+  nextChoose(r);
 }
 
 /* 정답자가 증강을 고른다 (던진 사람 → 가장 빠른 사람 순서) */
@@ -318,13 +341,20 @@ function resolveCapture(r) {
     p.result = { attackerWins: false, text: `${def.name} 방어 성공! ${atk.name}의 말이 되돌아갑니다` };
     log(r, `🛡️ ${def.name} 방어 성공!`);
   }
+  p.canContinue = true;
+  p.deadline = Date.now() + T.reveal;
   push(r);
+  setTimer(r, T.reveal, () => continueCapture(r));
+}
 
-  setTimer(r, 2800, () => {
-    r.pending = null;
-    checkWin(r, atk);
-    if (r.status === 'playing') advance(r); else push(r);
-  });
+function continueCapture(r) {
+  const p = r.pending;
+  if (!p || p.kind !== 'capture' || !p.revealed) return;
+  clearTimer(r);
+  const atk = byId(r, p.attacker);
+  r.pending = null;
+  if (atk) checkWin(r, atk);
+  if (r.status === 'playing') advance(r); else push(r);
 }
 
 /* ============================================================
@@ -406,9 +436,10 @@ function addPlayer(r, sock, name, id) {
 
 io.on('connection', s => {
 
-  s.on('create', ({ name, mode, pieceCount }, ack) => {
+  s.on('create', ({ name, mode, pieceCount, classCode }, ack) => {
     name = String(name || '').trim().slice(0, 12);
     if (!name) return fail(ack, '이름을 입력하세요.');
+    const cls = classCode ? classes.get(String(classCode).toUpperCase()) : null;
     const code = newCode(), id = crypto.randomUUID();
     const full = mode === 'full';
     const r = {
@@ -416,7 +447,10 @@ io.on('connection', s => {
       players: [], turn: 0, roll: null, extra: 0, pending: null, log: [], winner: null,
       host: id, traps: [], createdAt: Date.now(),
       pieceCount: Math.min(4, Math.max(2, Number(pieceCount) || (full ? 4 : 3))),
-      quizEvery: full ? 1 : 2, bank: null, chooseQueue: []
+      quizEvery: full ? 1 : 2,
+      bank: cls ? cls.bank : null,
+      classCode: cls ? cls.code : null, className: cls ? cls.name : null,
+      chooseQueue: []
     };
     rooms.set(code, r);
     addPlayer(r, s, name, id);
@@ -498,6 +532,38 @@ io.on('connection', s => {
     if (Object.keys(p.answers).length >= need) {
       if (p.kind === 'battle') resolveBattle(r); else resolveCapture(r);
     }
+  });
+
+  /* 계속 — 정답을 본 뒤 바로 다음으로 (누구나 누를 수 있다) */
+  s.on('continue', (_, ack) => {
+    const r = rooms.get(s.data.room); if (!r) return fail(ack, '방이 없습니다.');
+    const p = r.pending;
+    if (!p || !p.canContinue) return fail(ack, '지금은 넘어갈 수 없습니다.');
+    done(ack);
+    if (p.kind === 'battle') continueBattle(r); else if (p.kind === 'capture') continueCapture(r);
+  });
+
+  /* 바로 채점 — 아직 답 안 한 친구를 기다리지 않는다 (방장만) */
+  s.on('gradeNow', (_, ack) => {
+    const r = rooms.get(s.data.room); if (!r) return fail(ack, '방이 없습니다.');
+    const me = r.players.find(x => x.sid === s.id);
+    if (!me || r.host !== me.id) return fail(ack, '방장만 할 수 있습니다.');
+    const p = r.pending;
+    if (!p || p.revealed || (p.kind !== 'battle' && p.kind !== 'capture')) return fail(ack, '지금은 채점할 수 없습니다.');
+    done(ack);
+    if (p.kind === 'battle') resolveBattle(r); else resolveCapture(r);
+  });
+
+  /* 차례 넘기기 — 멈춰 있는 친구를 건너뛴다 (방장만) */
+  s.on('skipTurn', (_, ack) => {
+    const r = rooms.get(s.data.room); if (!r || r.status !== 'playing') return fail(ack, '게임이 진행 중이 아닙니다.');
+    const me = r.players.find(x => x.sid === s.id);
+    if (!me || r.host !== me.id) return fail(ack, '방장만 할 수 있습니다.');
+    if (r.pending) return fail(ack, '문제를 먼저 끝내세요.');
+    log(r, `⏭️ 방장이 ${cur(r)?.name} 차례를 넘겼습니다`);
+    r.roll = null; r.extra = 0;
+    done(ack);
+    advance(r);
   });
 
   /* 증강 선택 */
@@ -609,7 +675,7 @@ io.on('connection', s => {
   s.on('teacher:login', ({ pin }, ack) => {
     if (String(pin) !== PIN) return fail(ack, '교사 PIN이 다릅니다.');
     s.data.teacher = true; s.join('teachers');
-    done(ack, { rooms: summaries(), augments: AUG, bankCount: bank.length });
+    done(ack, { rooms: summaries(), augments: AUG, bankCount: bank.length, classes: [...classes.values()].map(c => ({ code: c.code, name: c.name, count: c.bank.length })) });
   });
   s.on('teacher:watch', ({ code }, ack) => {
     if (!s.data.teacher) return fail(ack, '권한이 없습니다.');
@@ -712,8 +778,41 @@ app.post('/api/questions',
     } catch (e) { res.status(400).json({ error: '엑셀을 읽지 못했습니다: ' + e.message }); }
   });
 
+/* 수업 만들기 — 교사가 문제은행과 함께 수업을 만들고 링크를 받는다 */
+app.post('/api/class',
+  express.raw({ type: () => true, limit: '3mb' }),
+  (req, res) => {
+    if (req.header('x-teacher-pin') !== PIN) return res.status(403).json({ error: '교사 인증 실패' });
+    const name = String(req.query.name || '').trim().slice(0, 40) || '영어 수업';
+    let questions = bank, skipped = [];
+    if (req.body && req.body.length > 100) {
+      try {
+        const parsed = parseBank(req.body);
+        questions = parsed.questions; skipped = parsed.skipped;
+      } catch (e) { return res.status(400).json({ error: '엑셀을 읽지 못했습니다: ' + e.message }); }
+      if (!questions.length) {
+        return res.status(400).json({
+          error: '읽을 수 있는 문제가 없습니다.',
+          hint: '첫 행이 unit / question / option1~4 / answer 또는 단원명 / 영어 문제 / 선택지 1~4 / 정답 번호 인지 확인하세요.',
+          skipped: skipped.slice(0, 10)
+        });
+      }
+    }
+    let code; do { code = crypto.randomBytes(2).toString('hex').toUpperCase(); } while (classes.has(code));
+    classes.set(code, { code, name, bank: questions, createdAt: Date.now() });
+    dirty = true;
+    res.json({ ok: true, code, name, count: questions.length, skipped: skipped.slice(0, 10) });
+  });
+
+/* 학생이 수업 링크로 들어왔을 때 수업 정보 */
+app.get('/api/class/:code', (req, res) => {
+  const c = classes.get(String(req.params.code || '').toUpperCase());
+  if (!c) return res.status(404).json({ error: '수업을 찾을 수 없습니다. 주소를 다시 확인하세요.' });
+  res.json({ ok: true, code: c.code, name: c.name, count: c.bank.length });
+});
+
 app.get('/healthz', (_, res) => res.json({
-  ok: true, rooms: rooms.size,
+  ok: true, rooms: rooms.size, classes: classes.size,
   players: [...rooms.values()].reduce((n, r) => n + r.players.filter(p => p.sid).length, 0),
   uptimeMin: Math.round(process.uptime() / 60), bank: bank.length, save: saveOff ? 'off' : 'on'
 }));
@@ -730,7 +829,7 @@ function save() {
   try {
     fs.mkdirSync(SAVE_DIR, { recursive: true });
     const data = [...rooms.values()].map(r => ({ ...r, players: r.players.map(p => ({ ...p, sid: null })) }));
-    fs.writeFileSync(SAVE_FILE, JSON.stringify({ savedAt: Date.now(), bank, rooms: data }));
+    fs.writeFileSync(SAVE_FILE, JSON.stringify({ savedAt: Date.now(), bank, classes: [...classes.values()], rooms: data }));
   } catch (e) {
     saveOff = true;
     console.warn('저장을 끕니다 (디스크에 쓸 수 없는 환경):', e.message);
@@ -742,6 +841,7 @@ function load() {
     if (!fs.existsSync(SAVE_FILE)) return;
     const d = JSON.parse(fs.readFileSync(SAVE_FILE, 'utf8'));
     if (Array.isArray(d.bank) && d.bank.length) bank = d.bank;
+    for (const c of d.classes || []) classes.set(c.code, c);
     for (const r of d.rooms || []) {
       r.players.forEach(p => { p.sid = null; });
       r.pending = null; r.roll = null; r.chooseQueue = [];

@@ -62,7 +62,11 @@ async function run() {
       await sleep(120);
       continue;
     }
-    if (s.pending && s.pending.answer) { await sleep(150); continue; }
+    // 정답을 본 뒤 '계속'을 눌러 기다리지 않는다
+    if (s.pending && s.pending.answer) {
+      if (s.pending.canContinue) await ask(ps[0].sock, 'continue', {});
+      await sleep(150); continue;
+    }
 
     // 증강 선택
     if (s.pending && s.pending.kind === 'choose') {

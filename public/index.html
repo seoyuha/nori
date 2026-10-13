@@ -20,6 +20,7 @@
       <p class="sub">English Yut Battle</p>
     </div>
 
+    <div class="classBanner" id="classBanner" hidden></div>
     <div class="animalStrip" id="animalStrip" aria-hidden="true"></div>
 
     <div class="card">
@@ -70,6 +71,7 @@
       <span class="codeLab">방 코드</span>
       <strong id="waitCode">······</strong>
       <span class="chip" id="waitMode"></span>
+      <span class="chip" id="waitClass" hidden></span>
     </div>
     <p class="sub center">친구들에게 이 코드를 알려 주세요. 2~5명이 함께해요.</p>
     <div class="seats" id="waitSeats"></div>
@@ -122,7 +124,20 @@
   </header>
   <div class="hanji wide">
     <div class="card">
-      <h3 class="pt">문제은행 바꾸기</h3>
+      <h3 class="pt">① 수업 만들기 — 학생에게 줄 주소가 나와요</h3>
+      <p class="hint">문제 엑셀을 넣고 수업을 만들면 주소가 하나 나옵니다. 그 주소를 반 전체에 알려 주면,
+        학생들이 들어가 <b>모둠별로 방을 만들어</b> 게임을 합니다. 모든 모둠이 같은 문제로 풀어요.</p>
+      <div class="row">
+        <input type="text" id="className" placeholder="수업 이름 (예: 6-1 9단원 길찾기)" maxlength="40">
+        <input type="file" id="classFile" accept=".xlsx,.xls,.csv">
+        <button class="btn" id="btnMakeClass">수업 만들기</button>
+      </div>
+      <div id="classOut"></div>
+      <div id="classList"></div>
+    </div>
+
+    <div class="card">
+      <h3 class="pt">② 이미 열린 방의 문제만 바꾸기</h3>
       <p class="hint">엑셀 첫 행에 <code>unit / question / option1~4 / answer / level / explanation</code> 또는
         <code>단원명 / 영어 문제 / 선택지 1~4 / 정답 번호 / 난이도 / 해설</code> 중 어느 쪽을 써도 됩니다.</p>
       <div class="row">
@@ -148,6 +163,7 @@
     <div class="opts" id="qOpts"></div>
     <div class="whoAnswered" id="whoAnswered"></div>
     <div class="reveal" id="qReveal" hidden></div>
+    <div class="battleActs" id="battleActs"></div>
   </div>
 </div>
 
