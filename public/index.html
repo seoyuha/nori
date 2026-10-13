@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>English Yut Battle</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Jua&family=Gaegu:wght@700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ══════════ 시작 화면 ══════════ -->
+<section id="landing" class="screen on">
+  <div class="hanji">
+    <div class="brand">
+      <div class="brandYut" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+      <h1>윷놀이 영어 대결</h1>
+      <p class="sub">English Yut Battle</p>
+    </div>
+
+    <div class="animalStrip" id="animalStrip" aria-hidden="true"></div>
+
+    <div class="card">
+      <label class="lab" for="myName">내 이름</label>
+      <input id="myName" maxlength="12" placeholder="예: 6-1 김하늘" autocomplete="off">
+
+      <div class="split">
+        <div class="half">
+          <h3>새 방 만들기</h3>
+          <div class="segs" id="modeSeg">
+            <button class="seg on" data-mode="simple">🌱 간편 수업<small>2턴마다 영어 배틀</small></button>
+            <button class="seg" data-mode="full">🔥 본격 증강<small>매 턴 영어 배틀</small></button>
+          </div>
+          <label class="lab small" for="pieceCount">말 개수</label>
+          <select id="pieceCount">
+            <option value="2">2개 — 가장 빠름 (10~15분)</option>
+            <option value="3" selected>3개 — 보통 (15~25분)</option>
+            <option value="4">4개 — 길게 (25분 이상)</option>
+          </select>
+          <button class="btn big" id="btnCreate">방 만들기</button>
+        </div>
+        <div class="half">
+          <h3>방에 들어가기</h3>
+          <label class="lab small" for="roomCode">방 코드</label>
+          <input id="roomCode" maxlength="6" placeholder="예: A1B2C3" autocomplete="off" style="text-transform:uppercase">
+          <button class="btn big alt" id="btnJoin">들어가기</button>
+          <p class="hint">같은 모둠 친구가 만든 방 코드를 넣으세요.</p>
+        </div>
+      </div>
+    </div>
+
+    <details class="card teacherBox">
+      <summary>선생님용 관제실</summary>
+      <div class="row">
+        <input id="teacherPin" type="password" placeholder="교사 PIN" maxlength="20">
+        <button class="btn alt" id="btnTeacher">열기</button>
+      </div>
+    </details>
+
+    <p class="foot">도·개·걸·윷·모는 돼지·개·양·소·말이에요. 윷을 던지며 영어 동물 이름도 함께 익혀요.</p>
+  </div>
+</section>
+
+<!-- ══════════ 대기실 ══════════ -->
+<section id="waiting" class="screen">
+  <div class="hanji narrow">
+    <div class="codeBig">
+      <span class="codeLab">방 코드</span>
+      <strong id="waitCode">······</strong>
+      <span class="chip" id="waitMode"></span>
+    </div>
+    <p class="sub center">친구들에게 이 코드를 알려 주세요. 2~5명이 함께해요.</p>
+    <div class="seats" id="waitSeats"></div>
+    <p class="center muted" id="waitInfo"></p>
+    <button class="btn big" id="btnStart">게임 시작</button>
+    <button class="btn ghost" id="btnLeaveWait">나가기</button>
+  </div>
+</section>
+
+<!-- ══════════ 게임 화면 ══════════ -->
+<section id="game" class="screen">
+  <header class="topbar">
+    <span class="chip code" id="gameCode"></span>
+    <span class="turnNow" id="turnNow"></span>
+    <span class="chip" id="connChip">연결 중</span>
+  </header>
+
+  <div class="stage">
+    <!-- 말판 -->
+    <div class="boardWrap">
+      <svg id="board" viewBox="0 0 600 600" role="img" aria-label="윷판"></svg>
+      <div class="rollBox" id="rollBox" hidden>
+        <div class="sticks" id="sticks"><i></i><i></i><i></i><i></i></div>
+        <div class="rollResult" id="rollResult"></div>
+      </div>
+    </div>
+
+    <!-- 오른쪽 패널 -->
+    <aside class="side">
+      <div class="panel me" id="mePanel"></div>
+      <div class="panel">
+        <h3 class="pt">같이 하는 친구</h3>
+        <div class="roster" id="roster"></div>
+      </div>
+      <div class="panel">
+        <h3 class="pt">지난 일</h3>
+        <div class="log" id="log"></div>
+      </div>
+      <button class="btn ghost sm" id="btnLeaveGame">나가기</button>
+    </aside>
+  </div>
+</section>
+
+<!-- ══════════ 교사 관제실 ══════════ -->
+<section id="teacher" class="screen">
+  <header class="topbar">
+    <span class="chip">👩‍🏫 선생님 관제실</span>
+    <span class="turnNow" id="teacherInfo"></span>
+    <button class="btn ghost sm" id="btnTeacherOut">나가기</button>
+  </header>
+  <div class="hanji wide">
+    <div class="card">
+      <h3 class="pt">문제은행 바꾸기</h3>
+      <p class="hint">엑셀 첫 행에 <code>unit / question / option1~4 / answer / level / explanation</code> 또는
+        <code>단원명 / 영어 문제 / 선택지 1~4 / 정답 번호 / 난이도 / 해설</code> 중 어느 쪽을 써도 됩니다.</p>
+      <div class="row">
+        <input type="file" id="xlsxFile" accept=".xlsx,.xls,.csv">
+        <select id="uploadScope"><option value="">모든 방에 적용</option></select>
+        <button class="btn alt" id="btnUpload">올리기</button>
+      </div>
+      <p id="uploadMsg" class="hint"></p>
+    </div>
+    <div class="roomGrid" id="roomGrid"></div>
+  </div>
+</section>
+
+<!-- ══════════ 겹쳐 뜨는 창 ══════════ -->
+<div class="ov" id="ovBattle" hidden>
+  <div class="sheet battle">
+    <div class="battleTop">
+      <span class="badge" id="battleKind">영어 배틀</span>
+      <span class="timer" id="battleTimer">20</span>
+    </div>
+    <p class="qUnit" id="qUnit"></p>
+    <h2 class="qText" id="qText"></h2>
+    <div class="opts" id="qOpts"></div>
+    <div class="whoAnswered" id="whoAnswered"></div>
+    <div class="reveal" id="qReveal" hidden></div>
+  </div>
+</div>
+
+<div class="ov" id="ovChoose" hidden>
+  <div class="sheet">
+    <h2 class="sheetTitle">증강을 하나 고르세요</h2>
+    <p class="hint center" id="chooseWho"></p>
+    <div class="augPick" id="augPick"></div>
+    <div class="timer small" id="chooseTimer"></div>
+  </div>
+</div>
+
+<div class="ov" id="ovAbility" hidden>
+  <div class="sheet">
+    <h2 class="sheetTitle" id="abilTitle"></h2>
+    <p class="hint center" id="abilDesc"></p>
+    <div id="abilBody"></div>
+    <button class="btn ghost" id="abilCancel">취소</button>
+  </div>
+</div>
+
+<div class="ov" id="ovWin" hidden>
+  <div class="sheet win">
+    <div class="winAnimal" id="winAnimal">🏆</div>
+    <h2 class="sheetTitle" id="winTitle"></h2>
+    <div class="rank" id="winRank"></div>
+    <button class="btn big" id="btnAgain">처음으로</button>
+  </div>
+</div>
+
+<div id="toast"></div>
+<div id="cutin" hidden><span id="cutinText"></span></div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

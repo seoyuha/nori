@@ -1,0 +1,16 @@
+# Render 배포 설정
+# Render 대시보드에서 Blueprint 로 이 저장소를 고르면 아래 내용대로 자동 생성됩니다.
+services:
+  - type: web
+    name: english-yut-battle
+    runtime: node
+    plan: free            # 유료로 바꾸려면 starter 로 (월 $7, 절전 없음)
+    region: singapore     # 한국에서 가장 가까운 지역
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: TEACHER_PIN
+        sync: false       # Render 대시보드에서 직접 입력합니다 (코드에 적지 않음)
+      - key: NODE_VERSION
+        value: "20"
