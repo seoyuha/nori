@@ -1,14 +1,15 @@
 /* ============================================================
-   English Yut Battle — 윷놀이 규칙 엔진 (순수 함수)
+   English Yut Battle v3 — 윷놀이 규칙 엔진 (순수 함수)
    서버와 테스트가 함께 쓴다. 화면/통신 코드는 들어가지 않는다.
    ============================================================ */
 import crypto from 'crypto';
 
 export const rand = n => crypto.randomInt(n);
+export const pick = arr => arr[rand(arr.length)];
 
 /* ---------- 말판 ----------
    바깥 20칸(0~19), 모서리는 0·5·10·15.
-   0번이 출발이자 도착 지점이다. 말은 0 → 1 → … → 19 → 도착 순서로 반시계 방향으로 돈다.
+   0번이 출발이자 도착 지점이다. 말은 0 → 1 → … → 19 → 도착 순서로 돈다.
 
    지름길 A: 5번 모서리 → 20 → 21 → 22(방) → 23 → 24 → 15번으로 합류
    지름길 B: 10번 모서리 → 25 → 26 → 22(방) → 27 → 28 → 도착
@@ -18,6 +19,7 @@ export const FINISH = 99;
 export const CENTER = 22;
 export const SC_A = [20, 21, 22, 23, 24];
 export const SC_B = [25, 26, 22, 27, 28];
+export const CORNERS = [0, 5, 10, 15];
 
 /* 화면 좌표 (0~5 격자). 서버가 클라이언트에 그대로 내려 주므로
    말판 좌표가 양쪽에 따로 적혀 어긋나는 일이 없다. */
@@ -32,28 +34,56 @@ export const COORD = (() => {
   return c;
 })();
 
-export const CORNERS = [0, 5, 10, 15];
-
-/* ---------- 윷 던지기 ----------
-   윷가락 4개를 각각 던진다. 평평한 면이 몇 개 나왔는지로 결정한다.
-   도 4/16, 개 6/16, 걸 4/16, 윷 1/16, 모 1/16 — 실제 윷과 같은 확률. */
-export const YUT = [
-  null,
-  { v: 1, name: '도', animal: '돼지', en: 'pig',   emoji: '🐷' },
-  { v: 2, name: '개', animal: '개',   en: 'dog',   emoji: '🐶' },
-  { v: 3, name: '걸', animal: '양',   en: 'sheep', emoji: '🐑' },
-  { v: 4, name: '윷', animal: '소',   en: 'cow',   emoji: '🐮' },
-  { v: 5, name: '모', animal: '말',   en: 'horse', emoji: '🐴' }
+/* 일직선으로 이어진 칸들 — '사목'과 '바둑'이 쓴다. */
+export const LINES = [
+  [0, 1, 2, 3, 4, 5],                      // 오른쪽 변
+  [5, 6, 7, 8, 9, 10],                     // 위쪽 변
+  [10, 11, 12, 13, 14, 15],                // 왼쪽 변
+  [15, 16, 17, 18, 19, 0],                 // 아래쪽 변
+  [5, 20, 21, 22, 23, 24, 15],             // 대각선 A
+  [10, 25, 26, 22, 27, 28, 0]              // 대각선 B
 ];
 
-export function throwSticks() {
-  const sticks = [0, 0, 0, 0].map(() => rand(2));   // 1 = 평평한 면
+/* ---------- 윷 던지기 ----------
+   윷가락 4개를 각각 던진다. 평평한 면이 몇 개인지로 결정한다.
+   도 4/16, 개 6/16, 걸 4/16, 윷 1/16, 모 1/16 — 실제 윷과 같은 확률.
+   윷가락 하나에는 표시가 있어, 평평한 면이 그것 하나뿐이면 '백도'(뒤로 한 칸)다. */
+export const YUT = {
+  '-1': { v: -1, name: '백도', animal: '쥐',   en: 'mouse', emoji: '🐭', back: true },
+  1:    { v: 1,  name: '도',   animal: '돼지', en: 'pig',   emoji: '🐷' },
+  2:    { v: 2,  name: '개',   animal: '개',   en: 'dog',   emoji: '🐶' },
+  3:    { v: 3,  name: '걸',   animal: '양',   en: 'sheep', emoji: '🐑' },
+  4:    { v: 4,  name: '윷',   animal: '소',   en: 'cow',   emoji: '🐮' },
+  5:    { v: 5,  name: '모',   animal: '말',   en: 'horse', emoji: '🐴' },
+  0:    { v: 0,  name: '꽝',   animal: '－',   en: 'none',  emoji: '💨' }
+};
+
+/* n개의 윷가락을 던진다. 0번 가락이 '표시된' 가락이다.
+   backdo=false 로 두면 백도가 나오지 않는다(이도류 합산 등 내부 계산용). */
+export function throwSticks(n = 4, { backdo = true } = {}) {
+  const sticks = Array.from({ length: n }, () => rand(2));   // 1 = 평평한 면
+  return readSticks(sticks, { backdo });
+}
+
+export function readSticks(sticks, { backdo = true } = {}) {
+  const n = sticks.length;
   const flat = sticks.reduce((a, b) => a + b, 0);
-  const v = flat === 0 ? 5 : flat;                  // 전부 둥근 면이면 모
+  let v;
+  if (n === 6) {
+    if (flat === 6) v = 'out';                 // 과유불급 — 앞면 6개면 탈락
+    else if (flat === 0) v = 5;                // 모
+    else if (flat === 5) v = 4;                // 윷
+    else v = flat;                             // 1~4 → 도·개·걸·윷
+  } else {
+    v = flat === 0 ? n + 1 : flat;             // 전부 둥근 면이면 모
+    if (v > 5) v = 5;
+  }
+  if (v === 'out') return { sticks, out: true, ...YUT[0], name: '탈락', v: 0 };
+  if (backdo && flat === 1 && sticks[0] === 1) v = -1;        // 표시된 가락만 평평 → 백도
   return { sticks, ...YUT[v] };
 }
 
-/* ---------- 한 칸 이동 ---------- */
+/* ---------- 한 칸 앞으로 ---------- */
 export function nextNode(pos, route) {
   if (pos === -1) return { pos: 0, route: 'outer' };          // 출발점에 올려놓기
 
@@ -74,41 +104,69 @@ export function nextNode(pos, route) {
   return { pos: n, route: 'outer' };
 }
 
+/* ---------- 한 칸 뒤로 (백도) ---------- */
+export function prevNode(pos, route) {
+  if (pos === -1 || pos === FINISH) return { pos, route };
+  if (route === 'A') {
+    const i = SC_A.indexOf(pos);
+    if (i > 0) return { pos: SC_A[i - 1], route: 'A' };
+    if (i === 0) return { pos: 5, route: 'outer' };
+  }
+  if (route === 'B') {
+    const i = SC_B.indexOf(pos);
+    if (i > 0) return { pos: SC_B[i - 1], route: 'B' };
+    if (i === 0) return { pos: 10, route: 'outer' };
+  }
+  const n = pos - 1;
+  if (n < 0) return { pos: RING - 1, route: 'outer' };        // 0번에서 백도 → 맨 뒤로
+  return { pos: n, route: 'outer' };
+}
+
 /* ---------- 여러 칸 이동 ----------
    전통 규칙: 모서리에 '정확히 멈췄을 때만' 지름길로 들어간다.
    지나가기만 한 말은 바깥길을 계속 돈다.
-   방(중앙)에 정확히 멈추면 도착으로 가는 가장 짧은 길로 빠진다. */
-export function travel(pos, route, steps) {
+   방(중앙)에 정확히 멈추면 도착으로 가는 가장 짧은 길로 빠진다.
+   steps 가 음수면 백도처럼 뒤로 간다. reverse=true 면 '달걸음'처럼 방향이 뒤집힌다. */
+export function travel(pos, route, steps, { reverse = false, stopAt = null } = {}) {
+  const back = (steps < 0) !== reverse;
+  const n = Math.abs(steps);
   let at = pos, rt = route || 'outer';
-  for (let k = 0; k < steps; k++) {
+  if (back && at === -1) return { pos: -1, route: 'outer' };  // 아직 안 나온 말은 뒤로 못 간다
+
+  for (let k = 0; k < n; k++) {
     if (at === FINISH) break;
-    const n = nextNode(at, rt);
-    at = n.pos; rt = n.route;
+    const nx = back ? prevNode(at, rt) : nextNode(at, rt);
+    at = nx.pos; rt = nx.route;
     if (at === FINISH) break;
+    if (stopAt && stopAt.has(at)) break;                      // 진흙을 밟으면 거기서 멈춘다
   }
-  if (at !== FINISH) {
-    if (rt === 'outer' && at === 5) rt = 'A';        // 5번에 멈췄다 → 다음 턴에 지름길
+  if (at !== FINISH && !back) {
+    if (rt === 'outer' && at === 5) rt = 'A';
     else if (rt === 'outer' && at === 10) rt = 'B';
-    else if (at === CENTER) rt = 'B';                // 방에 멈췄다 → 도착 쪽 지름길
+    else if (at === CENTER) rt = 'B';
   }
   return { pos: at, route: rt };
 }
 
-/* 말이 지나갈 칸들을 미리 계산한다. 화면에서 한 칸씩 뛰어가는 애니메이션에 쓴다. */
-export function pathOf(pos, route, steps) {
+/* 말이 지나갈 칸들 — 화면에서 한 칸씩 뛰어가는 애니메이션에 쓴다. */
+export function pathOf(pos, route, steps, opts = {}) {
+  const back = (steps < 0) !== !!opts.reverse;
+  const n = Math.abs(steps);
   const out = [];
   let at = pos, rt = route || 'outer';
-  for (let k = 0; k < steps; k++) {
+  if (back && at === -1) return out;
+  for (let k = 0; k < n; k++) {
     if (at === FINISH) break;
-    const n = nextNode(at, rt);
-    at = n.pos; rt = n.route;
+    const nx = back ? prevNode(at, rt) : nextNode(at, rt);
+    at = nx.pos; rt = nx.route;
     out.push(at);
     if (at === FINISH) break;
+    if (opts.stopAt && opts.stopAt.has(at)) break;
   }
   return out;
 }
 
-/* 완주까지 남은 칸 수 — 누가 앞서는지 재는 데 쓴다 (역전 보정·순위 표시) */
+/* ---------- 거리 ---------- */
 export function remain(pos, route) {
   if (pos === FINISH) return 0;
   let at = pos, rt = route || 'outer', n = 0;
@@ -125,4 +183,70 @@ export function progressOf(player) {
 export function groupAt(player, pos) {
   if (pos < 0 || pos === FINISH) return [];
   return player.pieces.map((p, i) => ({ p, i })).filter(x => x.p.pos === pos && x.p.route !== 'done');
+}
+
+/* ---------- 판 돌리기 / 접기 ----------
+   바깥 20칸만 움직인다. 안쪽 지름길 말은 제자리에 둔다. */
+export function rotatePos(pos, quarters) {
+  if (pos < 0 || pos >= RING) return pos;
+  return (pos + 5 * quarters + RING) % RING;
+}
+
+/* axis 0~3 : 어느 모서리를 기준으로 접을지. 바깥 칸을 거울처럼 뒤집는다. */
+export function foldPos(pos, axis) {
+  if (pos < 0 || pos >= RING) return pos;
+  const a = axis * 5;
+  return ((2 * a - pos) % RING + RING) % RING;
+}
+
+/* ---------- 사목 ----------
+   내 말이 일직선으로 이어진 네 칸을 차지했는지 본다. */
+export function hasFourInRow(positions) {
+  const set = new Set(positions.filter(p => p >= 0 && p !== FINISH));
+  for (const line of LINES) {
+    let run = 0;
+    for (const cell of line) {
+      run = set.has(cell) ? run + 1 : 0;
+      if (run >= 4) return true;
+    }
+  }
+  return false;
+}
+
+/* ---------- 바둑 ----------
+   일직선 위에서 내 두 말뭉치 사이에 낀 상대 칸들을 찾는다. */
+export function sandwiched(myPositions, enemyPositions) {
+  const mine = new Set(myPositions.filter(p => p >= 0 && p !== FINISH));
+  const foe = new Set(enemyPositions.filter(p => p >= 0 && p !== FINISH));
+  const caught = new Set();
+  for (const line of LINES) {
+    for (let i = 0; i < line.length; i++) {
+      if (!mine.has(line[i])) continue;
+      for (let j = i + 2; j < line.length; j++) {
+        if (!mine.has(line[j])) continue;
+        const between = line.slice(i + 1, j);
+        if (between.length && between.every(c => foe.has(c))) between.forEach(c => caught.add(c));
+        break;
+      }
+    }
+  }
+  return [...caught];
+}
+
+/* ---------- 말 종류 ----------
+   kind 가 'normal' 이 아닌 말은 움직이는 방식이나 승리 조건이 다르다. */
+export const PIECE_KIND = {
+  normal:     { label: '말',       icon: '●'  },
+  dokkaebi:   { label: '도깨비',   icon: '👺' },
+  vanguard:   { label: '선봉장',   icon: '🚩' },
+  cannon:     { label: '포',       icon: '🏹' },
+  pawn:       { label: '폰',       icon: '♟️' },
+  kimcheomji: { label: '김첨지',   icon: '🚶' },
+  queen:      { label: '중전마마', icon: '👸' },
+  marathoner: { label: '마라토너', icon: '🏃‍♀️' },
+  choir:      { label: '합창단원', icon: '🎵' }
+};
+
+export function newPiece(kind = 'normal') {
+  return { pos: -1, route: 'outer', kind, shield: 0, frozen: 0, locked: false };
 }

@@ -12,7 +12,7 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
-    "socket.io-client": "^4.8.1"
+    "socket.io-client": "^4.8.4"
   },
   "engines": {
     "node": ">=20"

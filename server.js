@@ -10,9 +10,11 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import {
-  throwSticks, travel, pathOf, remain, progressOf, groupAt,
-  COORD, CORNERS, RING, FINISH, CENTER, SC_A, SC_B, rand
+  throwSticks, travel, pathOf, remain, progressOf, groupAt, newPiece,
+  COORD, CORNERS, RING, FINISH, CENTER, SC_A, SC_B, LINES, PIECE_KIND, YUT, rand, pick
 } from './game.js';
+import { AUGMENTS, byId as augById, poolFor, PHASE_LABEL } from './augments.js';
+import * as FX from './effects.js';
 
 const app = express();
 const server = http.createServer(app);
@@ -26,29 +28,10 @@ const SAVE_FILE = path.join(SAVE_DIR, 'rooms.json');
 let saveOff = false;        // 디스크에 쓸 수 없는 환경이면 한 번만 알리고 끈다
 
 /* ---------- 시간 제한 (ms) ---------- */
-const T = { battle: 15000, capture: 12000, turn: 40000, choose: 15000, reveal: 6000 };
+const T = { battle: 20000, capture: 12000, turn: 45000, choose: 20000, reveal: 6000 };
 
 /* ---------- 증강 ---------- */
-const AUG = [
-  // 이동
-  { id: 'boost',  name: '질주',       icon: '⚡', group: '이동', rarity: 'common',   desc: '내 말 하나를 2칸 더 보낸다' },
-  { id: 'jump',   name: '도약',       icon: '🐇', group: '이동', rarity: 'rare',     desc: '내 말 하나를 4칸 보낸다' },
-  { id: 'heal',   name: '부활',       icon: '🌱', group: '이동', rarity: 'common',   desc: '아직 못 나온 말 하나를 3칸 보낸다' },
-  { id: 'double', name: '두 배 이동', icon: '✨', group: '이동', rarity: 'rare',     desc: '다음 윷 결과만큼 두 배로 간다' },
-  { id: 'reroll', name: '다시 던지기', icon: '🎲', group: '이동', rarity: 'common',  desc: '윷을 한 번 더 던진다' },
-  { id: 'fate',   name: '운명의 윷',  icon: '🔮', group: '이동', rarity: 'legend',   desc: '다음 윷 결과를 내가 고른다' },
-  // 공격
-  { id: 'freeze', name: '얼음 감옥',  icon: '❄️', group: '공격', rarity: 'rare',     desc: '상대 말 하나를 한 턴 묶는다' },
-  { id: 'back',   name: '역행',       icon: '↩️', group: '공격', rarity: 'rare',     desc: '상대 말 하나를 3칸 뒤로 보낸다' },
-  { id: 'trap',   name: '함정',       icon: '🕸️', group: '공격', rarity: 'rare',     desc: '내 말이 선 칸에 함정을 둔다' },
-  { id: 'steal',  name: '능력 훔치기', icon: '🦊', group: '공격', rarity: 'legend',  desc: '상대의 증강 하나를 빼앗는다(방어막 무시)' },
-  // 수비
-  { id: 'shield', name: '방어막',     icon: '🛡️', group: '수비', rarity: 'common',   desc: '내 말 하나가 잡기를 한 번 막는다' },
-  { id: 'guard',  name: '전체 보호',  icon: '🏰', group: '수비', rarity: 'legend',   desc: '내 모든 말이 잡기를 한 번 막는다' },
-  { id: 'swap',   name: '순간이동',   icon: '🔄', group: '수비', rarity: 'legend',   desc: '내 말과 상대 말의 자리를 바꾼다' }
-];
-const SIMPLE_IDS = ['boost', 'shield', 'reroll', 'jump', 'heal', 'freeze', 'double', 'back'];
-const augById = id => AUG.find(a => a.id === id);
+const AUG = AUGMENTS;
 
 /* ---------- 기본 문제 ---------- */
 const STARTER = [
@@ -79,6 +62,14 @@ function byId(r, id) { return r.players.find(p => p.id === id); }
 
 /* ---------- 상태 내려보내기 ----------
    정답 번호와 해설은 채점이 끝나기 전에는 절대 내려보내지 않는다. */
+function augView(p) {
+  return (p.augs || []).map(a => {
+    const d = augById(a.id) || {};
+    return { id: a.id, name: d.name, icon: d.icon, desc: d.desc, group: d.group, rarity: d.rarity,
+             kind: d.kind, needs: FX.NEEDS[a.id] || 'none', uses: a.uses, spent: !!a.spent };
+  });
+}
+
 function view(r, forTeacher) {
   const p = r.pending;
   let pending = null;
@@ -93,21 +84,27 @@ function view(r, forTeacher) {
       if (p.revealed) { pending.answer = p.q.answer; pending.explanation = p.q.explanation; pending.result = p.result; }
       pending.canContinue = !!p.canContinue;
     }
-    if (p.kind === 'choose') { pending.player = p.player; pending.choices = p.choices; }
+    if (p.kind === 'choose') {
+      pending.offers = p.offers; pending.picked = Object.keys(p.picked);
+      pending.round = r.round; pending.phaseLabel = PHASE_LABEL[p.phase] || '';
+    }
   }
   return {
     code: r.code, mode: r.mode, status: r.status, paused: r.paused,
     classCode: r.classCode || null, className: r.className || null,
-    turn: r.turn, roll: r.roll, extra: r.extra, winner: r.winner, host: r.host,
-    traps: r.traps, quizEvery: r.quizEvery, turnDeadline: r.turnDeadline,
+    turn: r.turn, round: r.round, roll: r.roll, winner: r.winner, winners: r.winners || [], host: r.host,
+    tiles: r.tiles || [], fog: r.fog || 0, hidden: r.hidden || 0, rotation: r.rotation || 0,
+    quizEvery: r.quizEvery, turnDeadline: r.turnDeadline,
     anim: r.anim || null,
     players: r.players.map(x => ({
       id: x.id, name: x.name, color: x.color, animal: x.animal, connected: !!x.sid,
-      pieces: x.pieces, abilities: x.abilities, correct: x.correct, total: x.total,
-      speed: x.speed, progress: progressOf(x), doubleNext: !!x.double, fate: !!x.fate
+      pieces: x.pieces, augs: augView(x), correct: x.correct, total: x.total,
+      speed: x.speed, progress: progressOf(x), throws: x.throws || 0,
+      eliminated: !!x.eliminated, health: x.health, rank: x.rank, winReason: x.winReason || null,
+      coins: x.coins || {}, claps: x.stats?.claps ?? null, skip: x.skip || 0
     })),
     pending, log: r.log.slice(-20), teacher: !!forTeacher,
-    board: { coord: COORD, corners: CORNERS, ring: RING, scA: SC_A, scB: SC_B, center: CENTER }
+    board: { coord: COORD, corners: CORNERS, ring: RING, scA: SC_A, scB: SC_B, center: CENTER, lines: LINES }
   };
 }
 function push(r) {
@@ -124,7 +121,7 @@ function summaries() {
     minutes: Math.round((Date.now() - r.createdAt) / 60000),
     players: r.players.map(p => ({
       name: p.name, animal: p.animal, correct: p.correct, total: p.total,
-      connected: !!p.sid, abilities: p.abilities.length, progress: progressOf(p)
+      connected: !!p.sid, abilities: (p.augs || []).length, progress: progressOf(p), eliminated: !!p.eliminated
     })),
     log: r.log.slice(-3).map(x => x.t)
   }));
@@ -140,52 +137,192 @@ function setTimer(r, ms, fn) {
 /* ============================================================
    턴 진행
    ============================================================ */
+/* 증강 효과가 판을 건드릴 때 쓰는 창구 */
+function makeApi(r) {
+  return {
+    log: t => log(r, t),
+    rand, pick,
+    players: () => r.players,
+    alive: () => r.players.filter(x => !x.eliminated),
+    enemies: me => r.players.filter(x => x !== me && !x.eliminated),
+    poolIds: () => poolFor(phaseOf(r), r.mode).map(a => a.id),
+    occupied: (rr, pos) => rr.players.some(t => t.pieces.some(x => x.pos === pos && FX.onBoard(x))),
+    sendHome: pc => { pc.pos = -1; pc.route = 'outer'; pc.kind = pc.kind === 'queen' ? 'normal' : pc.kind; },
+    capture: (victim, idxs, by, why) => doCapture(r, victim, idxs, by, why),
+    grant: (p, id) => grantAug(r, p, id),
+    eliminate: (p, why) => eliminate(r, p, why),
+    declareWin: (p, why, rank) => declareWin(r, p, why, rank)
+  };
+}
+
+function phaseOf(r) {
+  if (r.round <= 1) return 'start';
+  if (r.round <= 6) return 'mid';
+  return 'final';
+}
+
+/* 증강을 하나 쥐여 준다 (id 가 없으면 무작위) */
+function grantAug(r, p, id) {
+  const pool = poolFor(phaseOf(r), r.mode);
+  const a = id ? augById(id) : pick(pool);
+  if (!a) return;
+  p.augs.push({ id: a.id, uses: a.use || 1, spent: false });
+  if (a.kind === 'instant' || a.kind === 'passive') applyAug(r, p, a);
+}
+
+function applyAug(r, p, a) {
+  const fn = FX.ON_ACQUIRE[a.id];
+  const rec = p.augs.find(x => x.id === a.id && !x.spent);
+  try { if (fn) fn(r, p, makeApi(r)); } catch (e) { console.error('증강 오류', a.id, e); }
+  if (a.kind === 'instant' && rec) rec.spent = true;
+}
+
+/* 잡기 — 보호막·친구 방패·평화 협정을 모두 거친다 */
+function doCapture(r, victim, idxs, by, why) {
+  if (!victim || !idxs?.length) return 0;
+  if (victim.flags?.peace || by?.flags?.peace) { log(r, `🤝 평화 협정으로 ${victim.name}의 말은 무사합니다.`); return 0; }
+  let list = idxs.slice();
+  if (victim.flags?.friendShield && list.length > 1) list = [list[0]];
+  let n = 0;
+  for (const i of list) {
+    const pc = victim.pieces[i];
+    if (!pc || !FX.onBoard(pc)) continue;
+    if (pc.shield > 0) { pc.shield--; log(r, `🛡️ ${victim.name}의 보호막이 막았습니다.`); continue; }
+    pc.pos = -1; pc.route = 'outer'; pc.locked = false; n++;
+  }
+  if (n && by) {
+    log(r, `⚔️ ${by.name}이(가) ${victim.name}의 말 ${n}개를 잡았습니다${why ? ` (${why})` : ''}`);
+    try { FX.onCapture(r, by, victim, n, makeApi(r)); } catch (e) { console.error(e); }
+  }
+  return n;
+}
+
+function eliminate(r, p, why) {
+  if (p.eliminated) return;
+  p.eliminated = true;
+  p.pieces.forEach(x => { x.pos = -1; x.route = 'outer'; });
+  log(r, `❌ ${p.name} 탈락 — ${why}`);
+  const left = r.players.filter(x => !x.eliminated);
+  if (left.length === 1) declareWin(r, left[0], '마지막 생존');
+  else if (left.length === 0) finishGame(r);
+}
+
+function nextRank(r) {
+  return Math.max(0, ...r.players.map(x => x.rank || 0)) + 1;
+}
+
+function declareWin(r, p, why, rank) {
+  if (!p || p.rank) return;
+  r.winners ||= [];
+  /* 지정 순위(예: 동메달 3위)가 이미 찼으면 다음 빈 순위로 민다 */
+  if (rank && r.players.some(x => x.rank === rank)) rank = null;
+  p.rank = rank || nextRank(r);
+  p.winReason = why;
+  r.winners.push({ id: p.id, name: p.name, rank: p.rank, why });
+  log(r, `🏆 ${p.animal} ${p.name} — ${why}! (${p.rank}위)`);
+
+  /* 거머리·구조대로 운명을 함께하는 사람 */
+  r.players.forEach(t => {
+    if (t === p || t.rank) return;
+    if (t.flags?.leechOn === p.id || t.flags?.rescued === p.id) {
+      t.rank = p.rank; t.winReason = '함께 승리';
+      r.winners.push({ id: t.id, name: t.name, rank: t.rank, why: '함께 승리' });
+      log(r, `🤝 ${t.name}도 함께 승리합니다.`);
+    }
+  });
+
+  const rest = r.players.filter(x => !x.rank && !x.eliminated);
+  if (rest.length <= 1) finishGame(r);
+  return true;
+}
+
+function finishGame(r) {
+  r.status = 'finished';
+  clearTimer(r);
+  const rest = r.players.filter(x => !x.rank)
+    .sort((a, b) => (a.eliminated === b.eliminated ? progressOf(b) - progressOf(a) : (a.eliminated ? 1 : -1)));
+  let next = nextRank(r);
+  rest.forEach(x => { x.rank = next++; x.winReason = x.winReason || (x.eliminated ? '탈락' : '-'); });
+  /* 1위부터 빈 번호 없이 다시 매긴다. 함께 승리한 사람은 같은 순위를 유지한다. */
+  const order = [...new Set(r.players.map(x => x.rank).filter(Boolean))].sort((x, y) => x - y);
+  const remap = new Map(order.map((v, i) => [v, i + 1]));
+  r.players.forEach(x => { if (x.rank) x.rank = remap.get(x.rank); });
+
+  r.winner = r.players.find(x => x.rank === 1)?.name || null;
+  log(r, '게임이 끝났습니다.');
+}
+
+/* ============================================================
+   라운드 → 영어 문제 → 전원 증강 선택 → 각자 차례
+   ============================================================ */
+function startRound(r) {
+  r.round = (r.round || 0) + 1;
+  r.bannedAug = [];
+  if (r.fog > 0) r.fog--;
+  r.hidden = 0;
+  log(r, `── ${r.round}라운드 ──`);
+  openBattle(r);
+}
+
 function startTurn(r) {
   const p = cur(r);
   if (!p) return;
-  p.pieces.forEach(x => { x.frozen = false; });
+  if (p.eliminated || p.rank) return advance(r);
+  if (p.skip > 0) { p.skip--; log(r, `⏭️ ${p.name}은(는) 이번 차례를 쉽니다.`); return advance(r); }
+
   r.roll = null; r.anim = null;
+  p.throws = 1 + (r.echo ? 1 : 0);
+  try { FX.onTurnStart(r, p, makeApi(r)); } catch (e) { console.error(e); }
+  if (r.status !== 'playing') { push(r); return; }
+
+  /* 폰은 던질 때마다 저절로 앞으로 */
   r.turnDeadline = Date.now() + T.turn;
   log(r, `${p.animal} ${p.name} 차례`);
-  // 몇 턴마다 영어 배틀을 연다
-  p.turns = (p.turns || 0) + 1;
-  if (p.turns % r.quizEvery === 1 || r.quizEvery === 1) openBattle(r);
-  else { push(r); armTurnTimer(r); }
+  push(r); armTurnTimer(r);
 }
 
 function armTurnTimer(r) {
   setTimer(r, T.turn, () => {
     if (r.status !== 'playing' || r.paused || r.pending) return;
+    const c = cur(r);
+    if (process.env.YUT_DEBUG) console.log('[시간초과]', JSON.stringify({
+      name: c?.name, throws: c?.throws, roll: r.roll?.name, rollV: r.roll?.v,
+      elim: c?.eliminated, rank: c?.rank, skip: c?.skip, conn: !!c?.sid,
+      pieces: c?.pieces.map(x => `${x.pos}/${x.kind}${x.frozen ? 'F' : ''}${x.locked ? 'L' : ''}`)
+    }));
     log(r, `⏱️ ${cur(r)?.name} 시간 초과 — 차례를 넘깁니다`);
-    r.roll = null; r.extra = 0;
+    r.roll = null; if (cur(r)) cur(r).throws = 0;
     advance(r);
   });
 }
 
 function advance(r) {
   if (r.status !== 'playing') { push(r); return; }
-  if (r.extra > 0 && cur(r)?.sid) {
-    r.extra--;
+  const me = cur(r);
+  if (me && me.throws > 0 && me.sid && !me.eliminated && !me.rank) {
     r.roll = null; r.anim = null;
     r.turnDeadline = Date.now() + T.turn;
-    log(r, `${cur(r).name} 한 번 더!`);
+    log(r, `${me.name} 한 번 더!`);
     push(r); armTurnTimer(r);
-  } else {
-    r.extra = 0;
-    // 접속이 끊긴 학생의 차례는 건너뛴다 (모두 끊겼으면 그대로 둔다)
-    const n = r.players.length;
-    let step = 1, skipped = [];
-    while (step <= n) {
-      const cand = r.players[(r.turn + step) % n];
-      if (cand.sid) break;
-      skipped.push(cand.name);
-      step++;
-    }
-    if (step > n) step = 1;                       // 아무도 접속 안 됨
-    r.turn = (r.turn + step) % n;
-    if (skipped.length) log(r, `⏭️ ${skipped.join(', ')} 연결이 끊겨 건너뜁니다`);
-    startTurn(r);
+    return;
   }
+  if (me) { try { FX.onTurnEnd(r, me, makeApi(r)); } catch (e) { console.error(e); } }
+  if (r.status !== 'playing') { push(r); return; }
+
+  const n = r.players.length;
+  let step = 1, skipped = [];
+  while (step <= n) {
+    const cand = r.players[(r.turn + step) % n];
+    if (cand.sid && !cand.eliminated && !cand.rank) break;
+    if (cand.sid && !cand.eliminated) skipped.push(cand.name);
+    else if (!cand.sid) skipped.push(cand.name);
+    step++;
+  }
+  if (step > n) { finishGame(r); push(r); return; }
+  const wrapped = (r.turn + step) >= n;
+  r.turn = (r.turn + step) % n;
+  if (skipped.length) log(r, `⏭️ ${skipped.join(', ')} 건너뜁니다`);
+  if (wrapped) startRound(r); else startTurn(r);
 }
 
 /* ============================================================
@@ -198,8 +335,8 @@ function pickQuestion(r) {
 
 function openBattle(r) {
   const q = pickQuestion(r);
-  r.pending = { kind: 'battle', q, answers: {}, thrower: cur(r).id, deadline: Date.now() + T.battle, revealed: false };
-  log(r, `📣 영어 배틀! 모두 답하세요`);
+  r.pending = { kind: 'battle', q, answers: {}, thrower: cur(r)?.id || null, deadline: Date.now() + T.battle, revealed: false };
+  log(r, `📣 영어 배틀! 모두 답하세요 — 맞히면 증강을 한 장 더 받습니다`);
   push(r);
   setTimer(r, T.battle + 400, () => resolveBattle(r));
 }
@@ -224,11 +361,10 @@ function resolveBattle(r) {
   // 속도 점수 (1등 3점, 2등 2점, 나머지 정답 1점)
   right.forEach((pid, i) => { const pl = byId(r, pid); if (pl) pl.speed += i === 0 ? 3 : i === 1 ? 2 : 1; });
 
-  const thrower = byId(r, p.thrower);
-  const throwerRight = right.includes(p.thrower);
-  if (throwerRight) log(r, `✨ ${thrower.name} 정답! 증강을 고릅니다`);
-  else log(r, `${thrower.name} 오답 — 증강 없이 윷만 던집니다`);
-  if (right[0] && right[0] !== p.thrower) log(r, `⚡ ${byId(r, right[0]).name} 가장 빠른 정답! 보너스 증강`);
+  log(r, names.length
+    ? `✨ ${names.join(', ')} 정답! 증강을 한 장 더 고릅니다`
+    : '정답자가 없어요 — 모두 한 장씩만 고릅니다');
+  if (right[0]) log(r, `⚡ 가장 빠른 정답: ${byId(r, right[0])?.name}`);
 
   // '계속'을 누르면 바로, 아무도 안 누르면 잠시 뒤 자동으로 넘어간다
   p.canContinue = true;
@@ -242,53 +378,100 @@ function continueBattle(r) {
   if (!p || p.kind !== 'battle' || !p.revealed) return;
   clearTimer(r);
   const right = p.result?.right || [];
-  const queue = [];
-  if (right.includes(p.thrower)) queue.push({ pid: p.thrower, bonus: false });
-  if (right[0] && right[0] !== p.thrower) queue.push({ pid: right[0], bonus: true });
-  r.chooseQueue = queue;
   r.pending = null;
-  nextChoose(r);
+  openChoose(r, right);
 }
 
-/* 정답자가 증강을 고른다 (던진 사람 → 가장 빠른 사람 순서) */
-function nextChoose(r) {
-  const q = r.chooseQueue || [];
-  if (!q.length) { r.pending = null; r.turnDeadline = Date.now() + T.turn; push(r); armTurnTimer(r); return; }
-  const item = q.shift();
-  const pl = byId(r, item.pid);
-  if (!pl) return nextChoose(r);
-  r.pending = { kind: 'choose', player: pl.id, choices: offerAugments(r, pl, item.bonus), deadline: Date.now() + T.choose };
-  push(r);
-  setTimer(r, T.choose + 300, () => {
-    if (r.pending?.kind === 'choose' && r.pending.player === pl.id) {
-      const pick = r.pending.choices[0];
-      pl.abilities.push(pick.id);
-      log(r, `${pl.name} 시간 초과 — ${pick.icon}${pick.name} 자동 선택`);
-      nextChoose(r);
-    }
+/* 모두가 동시에 증강 3장 중 1장을 고른다. 정답자는 한 장 더 고른다. */
+function openChoose(r, right = []) {
+  const alive = r.players.filter(x => !x.eliminated && !x.rank && x.sid);
+  if (!alive.length) { startTurn(r); return; }
+  const offers = {}, extra = {};
+  alive.forEach(p => {
+    offers[p.id] = offerAugments(r, p);
+    if (right.includes(p.id)) extra[p.id] = 1;
   });
+  r.pending = {
+    kind: 'choose', phase: phaseOf(r),
+    offers, picked: {}, extra, deadline: Date.now() + T.choose
+  };
+  push(r);
+  setTimer(r, T.choose + 400, () => finishChoose(r, true));
 }
 
-/* 역전 보정: 뒤처진 학생일수록 좋은 증강이 나올 확률이 올라간다 */
+function takePick(r, p, augId) {
+  const pend = r.pending;
+  const list = pend.offers[p.id] || [];
+  const a = list.find(x => x.id === augId) || list[0];
+  if (!a) return;
+  log(r, `${p.name} → ${a.icon} ${a.name}`);
+  grantAug(r, p, a.id);
+
+  /* 이의있음! — 바로 다시 뽑는다 */
+  if (p.flags?.reroll) { p.flags.reroll = false; pend.offers[p.id] = offerAugments(r, p); return; }
+
+  if (pend.extra[p.id] > 0) {                       // 정답자 보너스 한 장 더
+    pend.extra[p.id]--;
+    pend.offers[p.id] = offerAugments(r, p, true);
+    return;
+  }
+  pend.picked[p.id] = a.id;
+}
+
+function finishChoose(r, timeout) {
+  const pend = r.pending;
+  if (!pend || pend.kind !== 'choose') return;
+  if (timeout) {
+    Object.keys(pend.offers).forEach(id => {
+      if (pend.picked[id]) return;
+      const p = byId(r, id); if (!p) return;
+      const a = pend.offers[id][0];
+      log(r, `${p.name} 시간 초과 — ${a.icon}${a.name} 자동 선택`);
+      grantAug(r, p, a.id);
+      pend.picked[id] = a.id;
+    });
+  }
+  clearTimer(r);
+  r.pending = null;
+  r.players.forEach(p => { if (!p.rank && !p.eliminated) FX.checkSpecialWin(r, p, makeApi(r)); });
+  if (r.status !== 'playing') { push(r); return; }
+  startTurn(r);
+}
+
+/* 뒤처진 학생일수록 좋은 증강이 나온다 */
 function offerAugments(r, player, bonusOnly) {
-  const pool = AUG.filter(a => r.mode === 'full' || SIMPLE_IDS.includes(a.id));
+  let pool = poolFor(phaseOf(r), r.mode)
+    .filter(a => !(r.bannedAug || []).includes(a.id))
+    .filter(a => !(player.augs || []).some(x => x.id === a.id));
+  if (!pool.length) pool = poolFor(phaseOf(r), r.mode);
+
   const progs = r.players.map(progressOf);
   const best = Math.max(...progs, 1), mine = progressOf(player);
-  const behind = Math.max(0, (best - mine) / best);          // 0(선두) ~ 1(많이 뒤처짐)
+  const behind = Math.max(0, (best - mine) / best);
   const w = { common: 60, rare: 30, legend: 10 };
   if (!bonusOnly) { w.rare += Math.round(behind * 25); w.legend += Math.round(behind * 20); w.common -= Math.round(behind * 45); }
-  else { w.common += 25; w.legend = Math.max(2, w.legend - 6); }   // 보너스는 조금 약하게
+  else { w.common += 25; w.legend = Math.max(2, w.legend - 6); }
 
   const picked = [];
   const bag = pool.slice();
-  for (let i = 0; i < 3 && bag.length; i++) {
+
+  /* 배달 — 지정한 증강이 반드시 나온다 */
+  const want = player.flags?.delivery;
+  if (want) {
+    const d = bag.findIndex(a => a.id === want);
+    if (d >= 0) { picked.push(bag[d]); bag.splice(d, 1); }
+    player.flags.delivery = null;
+  }
+  while (picked.length < 3 && bag.length) {
     const weights = bag.map(a => Math.max(1, w[a.rarity]));
     const total = weights.reduce((x, y) => x + y, 0);
     let t = rand(total), idx = 0;
     while (t >= weights[idx]) { t -= weights[idx]; idx++; }
     picked.push(bag[idx]); bag.splice(idx, 1);
   }
-  return picked;
+  /* 간택 — 고양이가 보이면 고양이만 고를 수 있다 */
+  if (r.catRule && picked.some(a => a.id === 'cat')) return picked.filter(a => a.id === 'cat');
+  return picked.map(a => ({ id: a.id, name: a.name, icon: a.icon, desc: a.desc, rarity: a.rarity, group: a.group }));
 }
 
 /* ============================================================
@@ -328,14 +511,10 @@ function resolveCapture(r) {
     let caught = 0;
     for (const t of targets) {
       const owner = byId(r, t.owner); if (!owner) continue;
-      for (const i of t.pieces) {
-        const ep = owner.pieces[i];
-        if (ep.shield > 0) { ep.shield--; log(r, `🛡️ ${owner.name}의 방어막이 막았습니다`); continue; }
-        ep.pos = -1; ep.route = 'outer'; caught++;
-      }
+      caught += doCapture(r, owner, t.pieces, atk, '잡기 승부');
     }
-    p.result = { attackerWins: true, text: caught ? `${atk.name} 승리! ${def.name}의 말 ${caught}개를 잡았습니다` : `${atk.name} 승리! 하지만 방어막에 막혔습니다` };
-    if (caught) { r.extra++; log(r, `🎯 ${atk.name}이(가) 말을 잡고 한 번 더!`); }
+    p.result = { attackerWins: true, text: caught ? `${atk.name} 승리! ${def.name}의 말 ${caught}개를 잡았습니다` : `${atk.name} 승리! 하지만 보호막에 막혔습니다` };
+    if (caught) { atk.throws++; log(r, `🎯 ${atk.name}이(가) 말을 잡고 한 번 더!`); }
   } else {
     // 수비 성공 — 공격한 말이 원래 자리로 되돌아간다
     for (const i of groupAt(atk, atk.pieces[pieceIdx].pos).map(x => x.i)) {
@@ -367,52 +546,62 @@ function applyMove(r, player, pieceIdx, steps) {
   const piece = player.pieces[pieceIdx];
   if (!piece) return '말을 찾을 수 없습니다.';
   if (piece.pos === FINISH) return '이미 도착한 말입니다.';
-  if (piece.frozen) return '얼음 감옥에 묶인 말입니다.';
-  if (steps <= 0) return '이동할 수 없습니다.';
+  if (piece.frozen > 0) return '묶여 있는 말입니다.';
+  if (piece.locked) return '영역 안에 고정된 말입니다.';
+  if (piece.kind === 'pawn') return '폰은 직접 움직일 수 없습니다.';
+  if (steps === 0) return '이동할 수 없습니다.';
+  if (steps < 0 && piece.pos < 0) return '아직 나오지 않은 말은 뒤로 갈 수 없습니다.';
 
-  // 업힌 말 — 같은 칸의 내 말들이 함께 움직인다
-  const group = groupAt(player, piece.pos).map(x => x.i);
+  const opts = { reverse: !!player.flags?.reverse, stopAt: FX.mudCells(r) };
+
+  // 업힌 말 — 같은 칸의 내 말들이 함께 움직인다 (나를 희생해 = 업기 없음)
+  const group = player.flags?.noStack ? [] : groupAt(player, piece.pos).map(x => x.i);
   const movers = group.length ? group : [pieceIdx];
   const from = piece.pos, fromRoute = piece.route;
 
-  const dest = travel(piece.pos, piece.route, steps);
-  const trail = pathOf(piece.pos, piece.route, steps);
+  const dest = travel(piece.pos, piece.route, steps, opts);
+  const trail = pathOf(piece.pos, piece.route, steps, opts);
   movers.forEach(i => { player.pieces[i].pos = dest.pos; player.pieces[i].route = dest.route; });
 
   r.anim = { player: player.id, pieces: movers, trail, seq: (r.anim?.seq || 0) + 1 };
-
   if (movers.length > 1) log(r, `${player.name}의 말 ${movers.length}개가 업혀서 함께 이동!`);
 
   if (dest.pos === FINISH) {
+    const kinds = movers.map(i => player.pieces[i].kind);
     log(r, `🏁 ${player.name}의 말 ${movers.length}개 완주!`);
+    if (player.stats?.queenLives != null) player.stats.queenLives++;
+    if (kinds.includes('queen')) { movers.forEach(i => { player.pieces[i].pos = 0; player.pieces[i].route = 'outer'; }); log(r, '👸 중전마마는 완주할 수 없어 되돌아갑니다.'); return {}; }
     return { finished: true };
   }
 
-  // 함정
-  const trap = r.traps.find(t => t.pos === dest.pos && t.owner !== player.id);
-  if (trap) {
-    movers.forEach(i => { player.pieces[i].pos = -1; player.pieces[i].route = 'outer'; });
-    r.traps = r.traps.filter(t => t !== trap);
-    log(r, `🕸️ ${player.name}이(가) 함정에 걸려 처음으로!`);
-    return { trapped: true };
-  }
+  // 멈춘 칸의 타일 (진흙·함정·보상·마늘)
+  movers.forEach(i => FX.steppedOn(r, player, player.pieces[i], makeApi(r)));
+  if (trail.length && FX.mudCells(r).has(dest.pos)) log(r, `🟤 ${player.name}의 말이 미끄러져 멈췄습니다.`);
 
   // 잡기 대상 찾기
   const targets = [];
   for (const other of r.players) {
     if (other.id === player.id) continue;
-    const hit = other.pieces.map((p, i) => ({ p, i })).filter(x => x.p.pos === dest.pos && x.p.pos >= 0 && x.p.pos !== FINISH);
+    const hit = other.pieces.map((p, i) => ({ p, i })).filter(x => x.p.pos === dest.pos && FX.onBoard(x.p));
     if (hit.length) targets.push({ owner: other.id, pieces: hit.map(x => x.i) });
   }
   if (targets.length) return { capture: { targets, pieceIdx: movers[0], from, fromRoute } };
   return {};
 }
 
+/* 폰은 윷을 던질 때마다 저절로 한 칸 */
+function movePawns(r, player) {
+  player.pieces.forEach((x, i) => {
+    if (x.kind !== 'pawn' || x.pos === FINISH) return;
+    const t = travel(x.pos, x.route, 1);
+    x.pos = t.pos; x.route = t.route;
+  });
+}
+
 function checkWin(r, player) {
-  if (player.pieces.every(p => p.pos === FINISH)) {
-    r.status = 'finished'; r.winner = player.name; clearTimer(r);
-    log(r, `🏆 ${player.animal} ${player.name} 우승!`);
-    return true;
+  if (FX.checkSpecialWin(r, player, makeApi(r))) return true;
+  if (player.pieces.length && player.pieces.every(p => p.pos === FINISH)) {
+    return declareWin(r, player, '전원 완주');
   }
   return false;
 }
@@ -428,8 +617,10 @@ function addPlayer(r, sock, name, id) {
     id, name: name || '학생', sid: sock?.id || null,
     color: COLORS[r.players.length % COLORS.length],
     animal: ANIMALS[r.players.length % ANIMALS.length],
-    pieces: Array.from({ length: r.pieceCount }, () => ({ pos: -1, route: 'outer', shield: 0, frozen: false })),
-    abilities: [], correct: 0, total: 0, speed: 0, turns: 0, double: false, fate: false
+    pieces: Array.from({ length: r.pieceCount }, () => newPiece()),
+    augs: [], correct: 0, total: 0, speed: 0, turns: 0, throws: 0,
+    coins: { dog: 0 }, flags: {}, stats: {},
+    eliminated: false, health: null, rank: null, skip: 0
   };
   r.players.push(p);
   if (sock) { sock.data.room = r.code; sock.data.id = id; sock.join(r.code); }
@@ -447,8 +638,9 @@ io.on('connection', s => {
     const full = mode === 'full';
     const r = {
       code, mode: full ? 'full' : 'simple', status: 'waiting', paused: false,
-      players: [], turn: 0, roll: null, extra: 0, pending: null, log: [], winner: null,
-      host: id, traps: [], createdAt: Date.now(),
+      players: [], turn: 0, round: 0, roll: null, pending: null, log: [], winner: null, winners: [],
+      host: id, tiles: [], bannedAug: [], fog: 0, hidden: 0, rotation: 0,
+      catRule: false, echo: false, lifeOwner: null, duel: null, createdAt: Date.now(),
       pieceCount: Math.min(4, Math.max(2, Number(pieceCount) || (full ? 4 : 3))),
       quizEvery: full ? 1 : 2,
       bank: cls ? cls.bank : null,
@@ -486,30 +678,61 @@ io.on('connection', s => {
     const r = rooms.get(s.data.room);
     if (!r || r.host !== s.data.id) return fail(ack, '방장만 시작할 수 있습니다.');
     if (r.players.length < 2) return fail(ack, '2명 이상 모여야 시작할 수 있습니다.');
-    r.status = 'playing'; r.turn = 0;
+    r.status = 'playing'; r.turn = 0; r.round = 0;
     log(r, '게임 시작!');
-    done(ack); startTurn(r);
+    done(ack); startRound(r);
   });
 
   /* 윷 던지기 */
-  s.on('throw', (_, ack) => {
+  s.on('throw', ({ choose } = {}, ack) => {
     const r = rooms.get(s.data.room);
     if (!r || r.status !== 'playing' || r.paused) return fail(ack, '게임이 진행 중이 아닙니다.');
     if (cur(r)?.sid !== s.id) return fail(ack, '내 차례가 아닙니다.');
     if (r.pending) return fail(ack, '먼저 진행 중인 것을 끝내세요.');
-    if (r.roll) return fail(ack, '먼저 말을 움직이세요.');
     const p = cur(r);
-    let res = throwSticks();
-    if (p.fate && p.fateValue) {           // 운명의 윷 — 미리 고른 값
-      res = { ...res, ...{ v: p.fateValue } };
-      const y = [null, '도', '개', '걸', '윷', '모'];
-      res.name = y[p.fateValue];
-      p.fate = false; p.fateValue = null;
-      log(r, `🔮 ${p.name} 운명의 윷 발동!`);
+
+    /* '한 걸음씩' — 이미 던진 결과에서 도·개 중 하나를 고르는 중 */
+    if (r.roll?.choices) {
+      const v = Number(choose);
+      if (!r.roll.choices.includes(v)) return fail(ack, '도 또는 개를 고르세요.');
+      r.roll = { ...YUT[v], sticks: [] };
+      const sv = (p.stats ||= {});
+      if (sv.throwsThisTurn?.length) sv.throwsThisTurn[sv.throwsThisTurn.length - 1] = v;
+      if (p.flags?.winScore) { sv.yutSeen ||= []; if (!sv.yutSeen.includes(v)) sv.yutSeen.push(v); }
+      log(r, `${p.name}: ${r.roll.emoji} ${r.roll.name} 선택 (${r.roll.v}칸)`);
+      r.turnDeadline = Date.now() + T.turn;
+      push(r); armTurnTimer(r);
+      return done(ack, { roll: r.roll });
     }
+
+    if (r.roll) return fail(ack, '먼저 말을 움직이세요.');
+    if ((p.throws || 0) <= 0) return fail(ack, '던질 기회가 없습니다.');
+    p.throws--;
+
+    /* 자진모리·어부지리로 예약된 결과 */
+    if (p.flags?.nextForced != null) { p.flags.forced = p.flags.nextForced; p.flags.nextForced = null; }
+
+    /* 도베르만 — 개 코인 2개로 모 만들기 */
+    if (choose === 'dogcoin' && p.flags?.doberman && (p.coins.dog || 0) >= 2) {
+      p.coins.dog -= 2; p.flags.forced = 5;
+      log(r, `🐕 ${p.name}이(가) 개 코인 2개를 써서 모를 만듭니다.`);
+    }
+
+    let res;
+    try { res = FX.rollFor(r, p); } catch (e) { console.error(e); res = throwSticks(); }
+
+    /* 한 걸음씩 — 도·개 중에서 고른다 */
+    if (res.choices && [1, 2].includes(Number(choose))) res = { ...YUT[Number(choose)], sticks: [] };
+
     r.roll = res;
-    if (res.v >= 4) { r.extra++; }
-    log(r, `${p.name}: ${res.emoji} ${res.name} (${res.en}) ${res.v}칸`);
+    r.lastWasBackdo = res.v === -1;
+    try { FX.afterRoll(r, p, res, makeApi(r)); } catch (e) { console.error(e); }
+    if (r.status !== 'playing' || p.eliminated) { r.roll = null; push(r); return done(ack, { roll: res }), advance(r); }
+
+    if (res.v >= 4) p.throws++;
+    movePawns(r, p);
+    log(r, `${p.name}: ${res.emoji} ${res.name} (${res.en}) ${res.v > 0 ? res.v + '칸' : res.v === -1 ? '뒤로 1칸' : ''}`);
+    FX.checkSpecialWin(r, p, makeApi(r));
     r.turnDeadline = Date.now() + T.turn;
     push(r); armTurnTimer(r); done(ack, { roll: res });
   });
@@ -564,23 +787,24 @@ io.on('connection', s => {
     if (!me || r.host !== me.id) return fail(ack, '방장만 할 수 있습니다.');
     if (r.pending) return fail(ack, '문제를 먼저 끝내세요.');
     log(r, `⏭️ 방장이 ${cur(r)?.name} 차례를 넘겼습니다`);
-    r.roll = null; r.extra = 0;
+    r.roll = null; if (cur(r)) cur(r).throws = 0;
     done(ack);
     advance(r);
   });
 
-  /* 증강 선택 */
+  /* 증강 선택 — 모두가 동시에 고른다 */
   s.on('choose', ({ id }, ack) => {
     const r = rooms.get(s.data.room); if (!r) return fail(ack, '방이 없습니다.');
-    const p = r.pending;
+    const pend = r.pending;
     const me = r.players.find(x => x.sid === s.id);
-    if (!p || p.kind !== 'choose' || !me || p.player !== me.id) return fail(ack, '지금은 고를 수 없습니다.');
-    const a = p.choices.find(c => c.id === id);
-    if (!a) return fail(ack, '선택할 수 없는 증강입니다.');
-    me.abilities.push(a.id);
-    log(r, `${me.name}이(가) ${a.icon}${a.name} 획득!`);
+    if (!pend || pend.kind !== 'choose' || !me) return fail(ack, '지금은 고를 수 없습니다.');
+    if (pend.picked[me.id]) return fail(ack, '이미 골랐습니다.');
+    if (!pend.offers[me.id]) return fail(ack, '이번에는 고를 차례가 아닙니다.');
+    if (!pend.offers[me.id].some(c => c.id === id)) return fail(ack, '선택할 수 없는 증강입니다.');
+    takePick(r, me, id);
     done(ack);
-    nextChoose(r);
+    const waiting = Object.keys(pend.offers).filter(pid => !pend.picked[pid]);
+    if (!waiting.length) finishChoose(r, false); else push(r);
   });
 
   /* 말 이동 */
@@ -590,11 +814,10 @@ io.on('connection', s => {
     if (cur(r)?.sid !== s.id) return fail(ack, '내 차례가 아닙니다.');
     if (r.pending) return fail(ack, '먼저 진행 중인 것을 끝내세요.');
     if (!r.roll) return fail(ack, '먼저 윷을 던지세요.');
-    const idx = Number(piece);
-    if (!Number.isInteger(idx) || idx < 0 || idx >= r.pieceCount) return fail(ack, '말 번호가 잘못되었습니다.');
     const p = cur(r);
-    const steps = r.roll.v * (p.double ? 2 : 1);
-    if (p.double) { p.double = false; log(r, `✨ ${p.name} 두 배 이동!`); }
+    const idx = Number(piece);
+    if (!Number.isInteger(idx) || idx < 0 || idx >= p.pieces.length) return fail(ack, '말 번호가 잘못되었습니다.');
+    const steps = FX.stepsFor(r, p, r.roll.v);
     const out = applyMove(r, p, idx, steps);
     if (typeof out === 'string') return fail(ack, out);
     r.roll = null;
@@ -605,72 +828,45 @@ io.on('connection', s => {
       openCapture(r, p, def, out.capture);
       return;
     }
-    if (checkWin(r, p)) { push(r); return; }
+    if (checkWin(r, p)) {
+      if (r.status !== 'playing') { push(r); return; }
+      p.throws = 0; advance(r); return;           // 이겼어도 판은 계속 — 차례를 넘긴다
+    }
     advance(r);
   });
 
   /* 증강 사용 */
-  s.on('ability', ({ id, piece, target, enemyPiece, value }, ack) => {
+  s.on('ability', (prm = {}, ack) => {
     const r = rooms.get(s.data.room);
     if (!r || r.status !== 'playing' || r.paused) return fail(ack, '게임이 진행 중이 아닙니다.');
-    if (cur(r)?.sid !== s.id) return fail(ack, '내 차례에만 쓸 수 있습니다.');
     if (r.pending) return fail(ack, '먼저 진행 중인 것을 끝내세요.');
-    const me = cur(r);
-    const at = me.abilities.indexOf(id);
-    if (at < 0) return fail(ack, '가지고 있지 않은 증강입니다.');
-    const a = augById(id);
-    const myIdx = Number(piece) || 0;
-    const my = me.pieces[myIdx];
-    const enemy = r.players.find(x => x.id === target && x.id !== me.id);
-    const ep = enemy?.pieces[Number(enemyPiece) || 0];
-    let err = null, captured = null;
+    const me = r.players.find(x => x.sid === s.id);
+    if (!me) return fail(ack, '참가자가 아닙니다.');
+    if (cur(r)?.id !== me.id) return fail(ack, '내 차례에만 쓸 수 있습니다.');
 
-    switch (id) {
-      case 'boost': case 'jump': case 'heal': {
-        if (id === 'heal') { if (!my || my.pos !== -1) { err = '아직 나오지 않은 내 말을 고르세요.'; break; } }
-        else if (!my || my.pos === FINISH) { err = '판 위의 내 말을 고르세요.'; break; }
-        if (r.roll) { err = '윷을 던지기 전이나 말을 옮긴 뒤에 쓰세요.'; break; }
-        const n = id === 'boost' ? 2 : id === 'jump' ? 4 : 3;
-        const out = applyMove(r, me, myIdx, n);
-        if (typeof out === 'string') { err = out; break; }
-        if (out.capture) captured = out.capture;
-        break;
-      }
-      case 'shield': if (!my) err = '말을 고르세요.'; else my.shield++; break;
-      case 'guard':  me.pieces.forEach(x => x.shield++); break;
-      case 'reroll': r.extra++; break;
-      case 'double': me.double = true; break;
-      case 'fate': {
-        const v = Number(value);
-        if (![1, 2, 3, 4, 5].includes(v)) { err = '도·개·걸·윷·모 중에서 고르세요.'; break; }
-        me.fate = true; me.fateValue = v; break;
-      }
-      case 'freeze': if (!ep || ep.pos < 0 || ep.pos === FINISH) err = '판 위의 상대 말을 고르세요.'; else ep.frozen = true; break;
-      case 'back': {
-        if (!ep || ep.pos < 0 || ep.pos === FINISH) { err = '판 위의 상대 말을 고르세요.'; break; }
-        let at2 = ep.pos;
-        for (let k = 0; k < 3; k++) at2 = at2 > 0 ? at2 - 1 : 0;
-        ep.pos = at2 < RING ? at2 : 0; ep.route = 'outer'; break;
-      }
-      case 'trap': if (!my || my.pos < 0 || my.pos === FINISH) err = '판 위의 내 말을 고르세요.'; else r.traps.push({ pos: my.pos, owner: me.id }); break;
-      case 'steal': {
-        if (!enemy || !enemy.abilities.length) { err = '증강을 가진 상대를 고르세요.'; break; }
-        me.abilities.push(enemy.abilities.pop()); break;
-      }
-      case 'swap': {
-        if (!ep || !my || ep.pos < 0 || my.pos < 0 || ep.pos === FINISH || my.pos === FINISH) { err = '판 위의 두 말을 고르세요.'; break; }
-        [my.pos, ep.pos] = [ep.pos, my.pos];
-        [my.route, ep.route] = [ep.route, my.route];
-        break;
-      }
-      default: err = '알 수 없는 증강입니다.';
-    }
-    if (err) return fail(ack, err);
-    me.abilities.splice(at, 1);
+    const rec = (me.augs || []).find(a => a.id === prm.id && !a.spent);
+    if (!rec) return fail(ack, '쓸 수 있는 증강이 아닙니다.');
+    const a = augById(prm.id);
+    if (!a || a.kind !== 'active') return fail(ack, '눌러서 쓰는 증강이 아닙니다.');
+    if (a.turn && (me.throws || 0) <= 0) return fail(ack, '차례를 쓰는 증강입니다. 던지기 전에 쓰세요.');
+
+    const fn = FX.ON_ACTIVATE[prm.id];
+    if (!fn) return fail(ack, '아직 준비되지 않은 증강입니다.');
+    let err = null;
+    try { err = fn(r, me, makeApi(r), prm); } catch (e) { console.error('증강 사용 오류', prm.id, e); err = '증강을 쓰는 중 문제가 생겼습니다.'; }
+    if (typeof err === 'string') return fail(ack, err);
+
+    rec.uses = (rec.uses || 1) - 1;
+    if (rec.uses <= 0) rec.spent = true;
+    if (a.turn) me.throws = 0;
     log(r, `${a.icon} ${me.name} — ${a.name} 사용!`);
     done(ack);
-    if (captured) { clearTimer(r); openCapture(r, me, byId(r, captured.targets[0].owner), captured); return; }
-    if (checkWin(r, me)) { push(r); return; }
+    if (r.status !== 'playing') { push(r); return; }
+    if (checkWin(r, me)) {
+      if (r.status !== 'playing') { push(r); return; }
+      me.throws = 0; advance(r); return;
+    }
+    if (a.turn) return advance(r);
     push(r);
   });
 
@@ -894,7 +1090,7 @@ app.get('/healthz', (_, res) => res.json({
   uptimeMin: Math.round(process.uptime() / 60), bank: bank.length, save: saveOff ? 'off' : 'on'
 }));
 
-app.get('/api/info', (_, res) => res.json({ augments: AUG, board: { coord: COORD, corners: CORNERS, ring: RING, scA: SC_A, scB: SC_B, center: CENTER }, bankCount: bank.length }));
+app.get('/api/info', (_, res) => res.json({ augments: AUG, needs: FX.NEEDS, board: { coord: COORD, corners: CORNERS, ring: RING, scA: SC_A, scB: SC_B, center: CENTER }, bankCount: bank.length }));
 
 /* ============================================================
    저장 — 서버가 꺼졌다 켜져도 진행 중이던 방이 살아남는다

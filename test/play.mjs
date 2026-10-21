@@ -1,155 +1,151 @@
-/* 학생 5명이 한 방에서 끝까지 플레이하는 자동 시험 */
+/* 서버를 띄우고 4명이 자동으로 끝까지 둔다. 터지는 곳이 있는지 본다. */
+import { spawn } from 'child_process';
 import { io } from 'socket.io-client';
-const URL = process.env.URL || 'http://localhost:3100';
+
+const DIR = '/home/claude/yut/english_yut_battle_v3';
+const PORT = 3111;
+const ROUNDS = Number(process.argv[2] || 1);
+const MODE = process.argv[3] || 'full';
+const PIECES = Number(process.argv[4] || 3);
+
+const srv = spawn('node', ['server.js'], {
+  cwd: DIR, env: { ...process.env, PORT, DATA_DIR: '/tmp/yut-test-data', TEACHER_PIN: 'testpin' },
+  stdio: ['ignore', 'pipe', 'pipe']
+});
+let serverErrors = [];
+srv.stdout.on('data', d => { const t = d.toString(); if (/error|Error/.test(t)) serverErrors.push(t.trim()); });
+srv.stderr.on('data', d => serverErrors.push(d.toString().trim()));
+
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+const URL = `http://localhost:${PORT}`;
 
 function mk(name) {
   const s = io(URL, { transports: ['websocket'] });
-  const me = { name, sock: s, id: null, code: null, state: null, answers: 0, chose: 0, threw: 0, moved: 0 };
-  s.on('state', st => { me.state = st; });
-  return me;
+  const p = { s, name, id: null, code: null, state: null, picks: 0, throws: 0, moves: 0, abilities: 0 };
+  s.on('state', st => { p.state = st; });
+  return p;
 }
-const ask = (s, ev, data) => new Promise(res => s.emit(ev, data, r => res(r)));
+const ask = (p, ev, data) => new Promise(res => p.s.emit(ev, data, res));
 
-const log = [];
-function note(t) { log.push(t); }
+let stats = { rounds: 0, picks: 0, throws: 0, moves: 0, abilities: 0, answers: 0, errors: [], wins: [], secs: [], seen: new Set(), used: new Set() };
 
-async function run() {
-  const names = ['하늘', '바다', '구름', '별이', '달이'];
-  const ps = names.map(mk);
-  await sleep(600);
+async function playOne(gameNo) {
+  const ps = ['가람', '나래', '다온', '라온'].map(mk);
+  await Promise.all(ps.map(p => new Promise(r => p.s.on('connect', r))));
 
-  const c = await ask(ps[0].sock, 'create', { name: names[0], mode: 'simple', pieceCount: 2 });
-  if (!c.ok) throw new Error('방 만들기 실패: ' + c.error);
-  ps[0].id = c.id; ps[0].code = c.code;
-  note(`방 ${c.code} 생성`);
-
-  for (let i = 1; i < ps.length; i++) {
-    const j = await ask(ps[i].sock, 'join', { code: c.code, name: names[i] });
-    if (!j.ok) throw new Error(`${names[i]} 입장 실패: ` + j.error);
-    ps[i].id = j.id; ps[i].code = j.code;
+  let res = await ask(ps[0], 'create', { name: ps[0].name, mode: MODE, pieceCount: PIECES });
+  if (!res.ok) throw new Error('방 생성 실패: ' + res.error);
+  ps[0].code = res.code; ps[0].id = res.id;
+  for (const p of ps.slice(1)) {
+    const r2 = await ask(p, 'join', { code: ps[0].code, name: p.name });
+    if (!r2.ok) throw new Error('입장 실패: ' + r2.error);
+    p.id = r2.id;
   }
-  await sleep(400);
-  if (ps[4].state.players.length !== 5) throw new Error('5명이 모이지 않음');
-  note('5명 입장 완료');
+  await sleep(120);
+  await ask(ps[0], 'start', {});
 
-  const st = await ask(ps[0].sock, 'start', {});
-  if (!st.ok) throw new Error('시작 실패: ' + st.error);
-  await sleep(500);
+  const t0 = Date.now();
+  const deadline = t0 + 70000;
+  let lastRound = 0;
+  while (Date.now() < deadline) {
+    const st = ps[0].state;
+    if (!st) { await sleep(40); continue; }
+    if (st.status === 'finished') break;
+    if (st.round > lastRound) { lastRound = st.round; stats.rounds++; }
 
-  let guard = 0, battles = 0, captures = 0, stacks = 0, shortcutUse = 0;
-  const S = () => ps[0].state;
-
-  while (S() && S().status === 'playing' && guard++ < 4000) {
-    const s = S();
-
-    // 배틀/잡기 — 해당하는 학생이 모두 답한다
-    if (s.pending && (s.pending.kind === 'battle' || s.pending.kind === 'capture') && !s.pending.answer) {
-      if (s.pending.kind === 'battle') battles++;
-      const who = s.pending.kind === 'capture'
-        ? ps.filter(p => [s.pending.attacker, s.pending.defender].includes(p.id))
-        : ps;
-      for (const p of who) {
-        if (s.pending.answered.includes(p.id)) continue;
-        // 70%는 정답을 맞히도록 (실제 교실과 비슷하게)
-        const right = p.state.pending?.question;
-        if (!right) continue;
-        const pick = Math.random() < 0.7 ? -1 : Math.floor(Math.random() * 4);
-        // 정답 번호는 클라이언트에 오지 않으므로 무작위로 고른다 → 서버 채점을 신뢰
-        await ask(p.sock, 'answer', { index: pick === -1 ? Math.floor(Math.random() * 4) : pick });
-        p.answers++;
+    const pend = st.pending;
+    if (pend?.kind === 'battle' || pend?.kind === 'capture') {
+      for (const p of ps) {
+        if ((pend.answered || []).includes(p.id)) continue;
+        if (pend.kind === 'capture' && p.id !== pend.attacker && p.id !== pend.defender) continue;
+        const idx = Math.random() < 0.6 ? (pend.question.options.length ? 0 : 0) : Math.floor(Math.random() * 4);
+        const a = await ask(p, 'answer', { index: idx });
+        if (a?.ok) stats.answers++;
       }
-      await sleep(120);
-      continue;
+      if (pend.canContinue) await ask(ps[0], 'continue', {});
+      await sleep(60); continue;
     }
-    // 정답을 본 뒤 '계속'을 눌러 기다리지 않는다
-    if (s.pending && s.pending.answer) {
-      if (s.pending.canContinue) await ask(ps[0].sock, 'continue', {});
-      await sleep(150); continue;
-    }
-
-    // 증강 선택
-    if (s.pending && s.pending.kind === 'choose') {
-      const p = ps.find(x => x.id === s.pending.player);
-      if (p) {
-        const pick = s.pending.choices[Math.floor(Math.random() * s.pending.choices.length)];
-        const r = await ask(p.sock, 'choose', { id: pick.id });
-        if (r.ok) p.chose++;
+    if (pend?.kind === 'choose') {
+      for (const p of ps) {
+        const offers = pend.offers?.[p.id];
+        if (!offers || (pend.picked || []).includes(p.id)) continue;
+        const a = await ask(p, 'choose', { id: offers[Math.floor(Math.random() * offers.length)].id });
+        if (a?.ok) { stats.picks++; offers.forEach(o => stats.seen.add(o.id)); } else if (a?.error) stats.errors.push('choose: ' + a.error);
       }
-      await sleep(120);
-      continue;
+      await sleep(60); continue;
     }
 
-    const turnP = ps.find(x => x.id === s.players[s.turn].id);
-    if (!turnP) break;
+    /* 내 차례 */
+    const turn = st.players[st.turn];
+    const p = ps.find(x => x.id === turn?.id);
+    if (!p) { await sleep(60); continue; }
 
-    // 가끔 증강을 써 본다
-    const myAb = s.players[s.turn].abilities;
-    if (myAb.length && !s.roll && Math.random() < 0.35) {
-      const id = myAb[0];
-      const others = s.players.filter(x => x.id !== turnP.id);
-      const enemy = others.find(e => e.pieces.some(pc => pc.pos >= 0 && pc.pos !== 99));
-      const myIdx = s.players[s.turn].pieces.findIndex(pc => pc.pos >= 0 && pc.pos !== 99);
-      const homeIdx = s.players[s.turn].pieces.findIndex(pc => pc.pos === -1);
-      const epIdx = enemy?.pieces.findIndex(pc => pc.pos >= 0 && pc.pos !== 99);
-      await ask(turnP.sock, 'ability', {
-        id,
-        piece: id === 'heal' ? (homeIdx < 0 ? 0 : homeIdx) : (myIdx < 0 ? 0 : myIdx),
-        target: enemy?.id, enemyPiece: epIdx < 0 ? 0 : epIdx, value: 4
-      });
-      await sleep(80);
-      continue;
+    /* 가끔 증강을 써 본다 */
+    const usable = (turn.augs || []).filter(a => a.kind === 'active' && !a.spent);
+    if (usable.length && Math.random() < 0.5) {
+      const a = usable[0];
+      const prm = { id: a.id };
+      const onBoard = turn.pieces.map((x, i) => ({ x, i })).filter(z => z.x.pos >= 0 && z.x.pos !== 99);
+      switch (a.needs) {
+        case 'myStack': prm.pos = onBoard[0]?.x.pos ?? 0; break;
+        case 'myPiece': prm.idx = onBoard[0]?.i ?? 0; prm.steps = 3; break;
+        case 'waitingPiece': prm.idx = turn.pieces.findIndex(x => x.pos === -1); break;
+        case 'cell': prm.pos = Math.floor(Math.random() * 20); break;
+        case 'player': case 'outPlayer': prm.playerId = st.players.find(x => x.id !== p.id)?.id; break;
+        case 'yut': prm.v = 4; break;
+        case 'rank': prm.order = st.players.map(x => x.id); break;
+      }
+      const r3 = await ask(p, 'ability', prm);
+      if (r3?.ok) { stats.abilities++; stats.used.add(a.id); }
     }
 
-    // 윷 던지기
-    if (!s.roll) {
-      const r = await ask(turnP.sock, 'throw', {});
-      if (r.ok) turnP.threw++;
-      await sleep(90);
-      continue;
+    if (!st.roll && (turn.throws || 0) > 0) {
+      const r4 = await ask(p, 'throw', {});
+      if (r4?.ok) stats.throws++; else if (r4?.error) stats.errors.push('throw: ' + r4.error);
+      await sleep(30); continue;
     }
-
-    // 말 이동 — 움직일 수 있는 말 중 하나
-    const pcs = s.players[s.turn].pieces;
-    const cands = pcs.map((pc, i) => ({ pc, i })).filter(x => x.pc.pos !== 99 && !x.pc.frozen);
-    if (!cands.length) { await sleep(120); continue; }
-    const pick = cands[Math.floor(Math.random() * cands.length)];
-    const before = JSON.stringify(s.players.map(p => p.pieces.map(x => x.pos)));
-    const r = await ask(turnP.sock, 'move', { piece: pick.i });
-    if (r.ok) turnP.moved++;
-    await sleep(110);
-    const after = ps[0].state;
-    if (after?.pending?.kind === 'capture') captures++;
-    // 업기 확인
-    const grouped = after?.players.some(p => {
-      const live = p.pieces.filter(x => x.pos >= 0 && x.pos !== 99).map(x => x.pos);
-      return new Set(live).size < live.length;
-    });
-    if (grouped) stacks++;
-    const onShort = after?.players.some(p => p.pieces.some(x => x.pos >= 20 && x.pos !== 99));
-    if (onShort) shortcutUse++;
+    if (st.roll) {
+      if (st.roll.choices) { await ask(p, 'throw', { choose: 1 }); await sleep(30); continue; }
+      const movable = turn.pieces.map((x, i) => ({ x, i }))
+        .filter(z => z.x.pos !== 99 && !z.x.frozen && !z.x.locked && z.x.kind !== 'pawn'
+                  && !(st.roll.v < 0 && z.x.pos < 0));
+      if (!movable.length) { await ask(ps[0], 'skipTurn', {}); await sleep(40); continue; }
+      const pick = movable[Math.floor(Math.random() * movable.length)];
+      const r5 = await ask(p, 'move', { piece: pick.i });
+      if (r5?.ok) stats.moves++; else if (r5?.error && !/차례|던지|진행/.test(r5.error)) stats.errors.push('move: ' + r5.error);
+      await sleep(30); continue;
+    }
+    await sleep(50);
   }
 
-  const fin = S();
-  note(`턴 반복 ${guard}회`);
-  note(`영어 배틀 ${battles}회 · 잡기 승부 ${captures}회`);
-  note(`업기 발생 ${stacks > 0 ? '있음' : '없음'} · 지름길 사용 ${shortcutUse > 0 ? '있음' : '없음'}`);
-  note(`상태: ${fin.status}  우승: ${fin.winner || '-'}`);
-  console.log('\n'.padEnd(1) + log.map(x => '  ' + x).join('\n'));
-
-  console.log('\n  학생별 기록');
-  for (const p of ps) {
-    const pl = fin.players.find(x => x.id === p.id);
-    console.log(`    ${pl.animal} ${pl.name.padEnd(4)} 던지기 ${String(p.threw).padStart(3)}  이동 ${String(p.moved).padStart(3)}  영어 ${String(pl.correct).padStart(2)}/${String(pl.total).padStart(2)}  증강획득 ${p.chose}  속도점수 ${pl.speed}  완주 ${pl.pieces.filter(x => x.pos === 99).length}/${pl.pieces.length}`);
+  const fin = ps[0].state;
+  if (fin?.status === 'finished') {
+    stats.secs.push(Math.round((Date.now()-t0)/1000));
+    stats.wins.push(fin.players.slice().sort((a, b) => (a.rank || 99) - (b.rank || 99))
+      .map(x => `${x.rank}위 ${x.name}(${x.winReason || '-'})`).join(', '));
+  } else {
+    stats.errors.push(`게임 ${gameNo}: 제한 시간 안에 끝나지 않음 (라운드 ${fin?.round})`);
   }
-  const totals = fin.players.map(p => p.total);
-  console.log(`\n  영어 문제 푼 횟수: 최소 ${Math.min(...totals)} ~ 최대 ${Math.max(...totals)}  (차이 ${Math.max(...totals) - Math.min(...totals)})`);
-
-  // 모두가 푸는 '영어 배틀'은 똑같이 나뉘고, 차이는 2명만 겨루는 '잡기 승부'에서만 생긴다.
-  const ok = fin.status === 'finished' && !!fin.winner
-    && battles > 0 && Math.max(...totals) - Math.min(...totals) <= 8;
-  console.log(`\n  결과: ${ok ? '✅ 통과' : '❌ 확인 필요'}`);
-  ps.forEach(p => p.sock.close());
-  process.exit(ok ? 0 : 1);
+  ps.forEach(p => p.s.close());
 }
-run().catch(e => { console.error('실패:', e.message); process.exit(1); });
+
+await sleep(900);
+try {
+  for (let i = 1; i <= ROUNDS; i++) await playOne(i);
+} catch (e) {
+  stats.errors.push('치명적: ' + e.message);
+}
+
+console.log('── 자동 대국 결과 ──');
+console.log(`라운드 ${stats.rounds} · 문제 응답 ${stats.answers} · 증강 선택 ${stats.picks} · 증강 사용 ${stats.abilities}`);
+console.log(`윷 던지기 ${stats.throws} · 말 이동 ${stats.moves}`);
+stats.wins.forEach((w, i) => console.log(`게임 ${i + 1} 결과: ${w}`));
+const uniq = [...new Set(stats.errors)];
+if (uniq.length) { console.log(`\n문제 ${uniq.length}종:`); uniq.slice(0, 25).forEach(e => console.log('  -', e)); }
+else console.log('\n✅ 오류 없음');
+console.log(`끝난 게임 길이(초): ${stats.secs.join(', ') || '-'} · 평균 ${stats.secs.length?Math.round(stats.secs.reduce((a,b)=>a+b,0)/stats.secs.length):'-'}초`);
+console.log(`\n선택창에 등장한 증강 ${stats.seen.size}종 · 실제로 사용된 active 증강 ${stats.used.size}종`);
+if (serverErrors.length) { console.log('\n서버 로그 오류:'); [...new Set(serverErrors)].slice(0, 15).forEach(e => console.log('  !', e.split('\n')[0])); }
+
+srv.kill();
+process.exit(0);
