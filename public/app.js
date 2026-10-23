@@ -507,20 +507,47 @@ $('btnTeacherOut').onclick = () => { if (watching) { watching = ''; renderTeache
 $('btnNewSet').onclick = () => { $('newSetBox').hidden = false; };
 $('btnCancelSet').onclick = () => { $('newSetBox').hidden = true; };
 
+/* 교사용 요청 — PIN은 서버가 x-teacher-pin 헤더로 받는다 */
+async function teacherFetch(url, opts = {}) {
+  const res = await fetch(url, {
+    ...opts,
+    headers: { ...(opts.headers || {}), 'x-teacher-pin': teacherPin }
+  });
+  let d = null;
+  try { d = await res.json(); } catch (e) { d = null; }
+  if (!res.ok || d?.error) {
+    const msg = d?.error || `요청이 실패했습니다 (${res.status})`;
+    toast(res.status === 403 ? '교사 PIN이 다릅니다. 관제실을 다시 열어 주세요.' : msg);
+    if (d?.hint) $('classOut').innerHTML = `<p class="hint">${esc(d.hint)}</p>`;
+    return null;
+  }
+  return d;
+}
+
 $('btnMakeClass').onclick = async () => {
   const name = $('className').value.trim();
   if (!name) return toast('세트 이름을 써 주세요.');
   const f = $('classFile').files[0];
-  const fd = new FormData();
-  fd.append('name', name); fd.append('pin', teacherPin);
-  if (f) fd.append('file', f);
+  const btn = $('btnMakeClass');
+  btn.disabled = true; btn.textContent = '올리는 중…';
   try {
-    const res = await fetch('/api/class', { method: 'POST', body: fd });
-    const d = await res.json();
-    if (d.error) return toast(d.error);
-    $('classOut').innerHTML = `<p class="hint">만들었습니다 — 학생 주소: <b>${location.origin}/?class=${d.code}</b> (문제 ${d.count}개)</p>`;
+    const body = f ? await f.arrayBuffer() : new ArrayBuffer(0);
+    const d = await teacherFetch('/api/class?name=' + encodeURIComponent(name), {
+      method: 'POST',
+      headers: { 'content-type': 'application/octet-stream' },
+      body
+    });
+    if (!d) return;
+    const url = location.origin + '/?class=' + d.code;
+    $('classOut').innerHTML =
+      `<p class="hint">만들었습니다 — 문제 ${d.count}개<br>학생 주소: <b>${esc(url)}</b></p>` +
+      (d.skipped?.length ? `<p class="hint">못 읽은 줄 ${d.skipped.length}개: ${esc(d.skipped.join(', '))}</p>` : '');
     $('className').value = ''; $('classFile').value = '';
-  } catch (e) { toast('만들지 못했습니다.'); }
+  } catch (e) {
+    toast('만들지 못했습니다: ' + e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = '만들기';
+  }
 };
 
 function renderTeacher() {
@@ -558,16 +585,15 @@ $('teacher').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
   if (b.dataset.watch) { watching = b.dataset.watch; send('teacher:watch', { code: watching }); renderTeacher(); }
   if (b.dataset.pause) send('teacher:pause', { code: b.dataset.pause });
-  if (b.dataset.act) fetch('/api/class/' + b.dataset.act + '/activate', {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ pin: teacherPin })
-  }).then(() => toast('적용했습니다.'));
+  if (b.dataset.act) teacherFetch('/api/class/' + b.dataset.act + '/activate', { method: 'POST' })
+    .then(d => { if (d) toast(`「${d.name}」을(를) 적용했습니다. (문제 ${d.count}개)`); });
   if (b.dataset.copy) {
     const url = location.origin + '/?class=' + b.dataset.copy;
     navigator.clipboard?.writeText(url).then(() => toast('주소를 복사했습니다: ' + url), () => toast(url));
   }
-  if (b.dataset.del && confirm('이 문제 세트를 지울까요?')) fetch('/api/class/' + b.dataset.del, {
-    method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ pin: teacherPin })
-  }).then(() => toast('지웠습니다.'));
+  if (b.dataset.del && confirm('이 문제 세트를 지울까요?'))
+    teacherFetch('/api/class/' + b.dataset.del, { method: 'DELETE' })
+      .then(d => { if (d) toast('지웠습니다.'); });
 });
 
 show('landing');
