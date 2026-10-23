@@ -76,6 +76,16 @@ $('mnClose').onclick = () => { $('ovMenu').hidden = true; };
 $('mnGrade').onclick = () => { $('ovMenu').hidden = true; send('gradeNow', {}); };
 $('mnSkip').onclick = () => { $('ovMenu').hidden = true; send('skipTurn', {}); };
 $('mnLeave').onclick = () => { if (confirm('게임에서 나갈까요? 돌아올 수 없어요.')) leave(); };
+$('mnKill').onclick = closeRoom;
+$('btnKillRoom').onclick = closeRoom;
+$('btnKillWait').onclick = closeRoom;
+
+/* 방 없애기 — 방장만. 같은 방 친구들도 모두 나가게 된다. */
+function closeRoom() {
+  if (myP()?.id !== S?.host) return toast('방장만 방을 없앨 수 있습니다.');
+  if (!confirm('이 방을 없앨까요? 같은 방 친구들도 모두 나가게 됩니다.')) return;
+  send('closeRoom', {}, res => { if (res?.ok) { localStorage.removeItem('yutMe'); me = null; } });
+}
 
 if (CLASS_CODE) {
   fetch('/api/class/' + CLASS_CODE).then(r => r.json()).then(d => {
@@ -137,33 +147,79 @@ function drawBoard() {
     const xy = nodeXY(co, +pos); if (!xy) continue;
     const here = spots[pos];
     const groups = {};
-    here.forEach(x => (groups[x.p.id] ||= { p: x.p, n: 0, kinds: [] }) && (groups[x.p.id].n++, groups[x.p.id].kinds.push(x.pc.kind)));
+    here.forEach(x => {
+      const g0 = (groups[x.p.id] ||= { p: x.p, n: 0, kinds: [], idx: [] });
+      g0.n++; g0.kinds.push(x.pc.kind); g0.idx.push(x.i);
+    });
     const list = Object.values(groups);
     list.forEach((grp, gi) => {
       const off = list.length > 1 ? (gi - (list.length - 1) / 2) * 22 : 0;
       const cx = xy[0] + off, cy = xy[1];
       const mine = grp.p.id === me?.id;
       const hide = fogOn && !mine;
+      /* 업힌 말은 바깥에 테두리를 한 겹 더 둘러 한눈에 보이게 한다 */
+      if (grp.n > 1) g += `<circle cx="${cx}" cy="${cy}" r="19.5" fill="none" stroke="#1A1A1A" stroke-width="2"/>`;
       g += `<circle cx="${cx}" cy="${cy}" r="15" fill="${hide ? '#C9CDC7' : grp.p.color}" stroke="#1A1A1A" stroke-width="2.5"/>`;
-      const special = grp.kinds.find(k => k && k !== 'normal');
-      if (!hide && special) g += `<text x="${cx}" y="${cy + 5}" text-anchor="middle" font-size="14">${kindIcon(special)}</text>`;
-      else if (grp.n > 1) g += `<text x="${cx}" y="${cy + 5}" text-anchor="middle" font-size="14" font-weight="800" fill="#fff">${grp.n}</text>`;
+      if (!hide) {
+        /* 혼자면 말 번호, 업혔으면 번호를 가운뎃점으로 잇고, 셋 이상이면 개수로 */
+        const ns = grp.idx.map(i => i + 1);
+        const label = ns.length === 1 ? String(ns[0]) : ns.length === 2 ? ns.join('·') : '×' + ns.length;
+        g += `<text x="${cx}" y="${cy + 5}" text-anchor="middle" font-size="${ns.length === 2 ? 11 : 13}" font-weight="800" fill="#fff" style="paint-order:stroke" stroke="#1A1A1A" stroke-width="2.5">${label}</text>`;
+        const special = grp.kinds.find(k => k && k !== 'normal');
+        if (special) g += `<text x="${cx}" y="${cy - 19}" text-anchor="middle" font-size="14">${kindIcon(special)}</text>`;
+      }
     });
   }
   $('board').innerHTML = g;
 }
 
 const KIND_ICON = { dokkaebi: '👺', vanguard: '🚩', cannon: '🏹', pawn: '♟️', kimcheomji: '🚶', queen: '👸', marathoner: '🏃', choir: '🎵' };
+const PIECE_LABEL = { dokkaebi: '도깨비', vanguard: '선봉장', cannon: '포', pawn: '폰', kimcheomji: '김첨지', queen: '중전마마', marathoner: '마라토너', choir: '합창단원' };
 const kindIcon = k => KIND_ICON[k] || '';
 
 /* ============================================================
    플레이어 카드
    ============================================================ */
-function pieceDots(p) {
-  return p.pieces.map(pc => {
-    const cls = pc.pos === 99 ? 'fin' : pc.pos < 0 ? 'home' : '';
-    return `<i class="${cls}" style="background:${p.color}" title="${pc.kind !== 'normal' ? kindIcon(pc.kind) : ''}"></i>`;
-  }).join('');
+/* 말 한 개를 어디에 있는지 글자로 */
+function whereText(pc) {
+  if (pc.pos === 99) return '도착';
+  if (pc.pos < 0) return '집';
+  return pc.pos + '번 칸';
+}
+
+/* 같은 칸에 있는 내 말 = 업힌 말. 번호를 묶어서 돌려준다. */
+function stackMap(p) {
+  const m = {};
+  p.pieces.forEach((pc, i) => {
+    if (pc.pos < 0 || pc.pos === 99) return;
+    (m[pc.pos] ||= []).push(i + 1);
+  });
+  return m;
+}
+
+function pieceRow(p, clickable) {
+  const stacks = stackMap(p);
+  return `<div class="pcs">` + p.pieces.map((pc, i) => {
+    const on = pc.pos >= 0 && pc.pos !== 99;
+    const mates = on ? stacks[pc.pos] : null;
+    const stacked = mates && mates.length > 1;
+    const cls = [
+      pc.pos === 99 ? 'fin' : pc.pos < 0 ? 'home' : '',
+      stacked ? 'stack' : '',
+      pc.frozen > 0 || pc.locked ? 'held' : '',
+      clickable && pc.pos !== 99 ? 'pick' : ''
+    ].filter(Boolean).join(' ');
+    const tip = `${i + 1}번 말 · ${whereText(pc)}` +
+      (stacked ? ` · ${mates.join('+')}번이 함께 업힘` : '') +
+      (pc.kind !== 'normal' ? ` · ${PIECE_LABEL[pc.kind] || ''}` : '');
+    return `<button class="pc ${cls}" ${clickable && pc.pos !== 99 ? `data-piece="${i}"` : 'disabled'} title="${esc(tip)}">
+      <i style="background:${p.color}">${i + 1}</i>
+      <span class="w">${whereText(pc)}</span>
+      ${pc.kind !== 'normal' ? `<span class="k">${kindIcon(pc.kind)}</span>` : ''}
+      ${stacked ? `<span class="st">업기 ${mates.length}</span>` : ''}
+      ${pc.frozen > 0 ? '<span class="st hold">묶임</span>' : pc.locked ? '<span class="st hold">고정</span>' : ''}
+    </button>`;
+  }).join('') + `</div>`;
 }
 function augChips(p, clickable) {
   const slots = [];
@@ -193,7 +249,7 @@ function playerCard(p, opts = {}) {
       <span class="cnt">${p.rank ? p.rank + '위' : p.eliminated ? '탈락' : done + ' / ' + p.pieces.length}</span>
     </div>
     ${hpRow(p)}
-    <div class="pcs">${pieceDots(p)}</div>
+    ${pieceRow(p, !!opts.pickable)}
     ${augChips(p, !!opts.clickable)}
   </div>`;
 }
@@ -219,7 +275,10 @@ function render() {
   const others = S.players.filter(p => p.id !== me?.id);
   $('leftCol').innerHTML = others.map(p => playerCard(p)).join('');
   const my = myP();
-  $('mePanel').innerHTML = my ? playerCard(my, { clickable: isMyTurn() && !S.pending }) : '';
+  const canAct = isMyTurn() && !S.pending && S.status === 'playing';
+  $('mePanel').innerHTML = my
+    ? playerCard(my, { clickable: canAct, pickable: canAct && !!S.roll })
+    : '';
 
   renderRoll();
   $('log').innerHTML = (S.log || []).slice(-30).map(x => `<div>${esc(x.t)}</div>`).join('');
@@ -240,7 +299,9 @@ function renderWaiting() {
   for (let i = S.players.length; i < 5; i++) seats.push('<div class="seat empty">비어 있음</div>');
   $('waitSeats').innerHTML = seats.join('');
   $('waitInfo').textContent = S.players.length < 2 ? '2명 이상 모이면 시작할 수 있어요.' : '모두 모였으면 방장이 시작하세요.';
-  $('btnStart').disabled = S.players.length < 2 || myP()?.id !== S.host;
+  const host = myP()?.id === S.host;
+  $('btnStart').disabled = S.players.length < 2 || !host;
+  $('btnKillWait').hidden = !host;
 }
 
 function renderRoll() {
@@ -264,16 +325,8 @@ function renderRoll() {
   }
   $('rollActs').innerHTML = acts.join('');
   $('actHint').textContent = !mine ? ''
-    : r ? '옮길 말을 고르세요 — 아래 내 말을 누르면 됩니다'
+    : r ? '옮길 말의 번호를 누르세요'
       : (my?.throws || 0) > 0 ? '' : '차례가 끝났어요';
-
-  /* 말 고르기 — 내 패널의 말 점을 누르면 이동 */
-  if (mine && S.roll && !S.pending) {
-    $('mePanel').querySelectorAll('.pcs i').forEach((el, i) => {
-      el.style.cursor = 'pointer';
-      el.onclick = () => send('move', { piece: i });
-    });
-  }
 }
 
 /* 윷 던지기 · 증강 사용 버튼 */
@@ -284,6 +337,8 @@ document.addEventListener('click', e => {
   if (py) return send('throw', { choose: +py.dataset.pickyut });
   const us = e.target.closest('[data-use]');
   if (us) return openAbility(us.dataset.use);
+  const pc = e.target.closest('[data-piece]');
+  if (pc) return send('move', { piece: +pc.dataset.piece });
 });
 
 /* ============================================================
@@ -401,6 +456,9 @@ function showSpecial(w) {
 $('spOk').onclick = () => { $('ovSpecial').hidden = true; };
 
 function renderRank() {
+  const host = myP()?.id === S.host;
+  $('btnKillRoom').hidden = !host;
+  $('killHint').hidden = !host;
   const rows = S.players.slice().sort((a, b) => (a.rank || 99) - (b.rank || 99));
   $('winRank').innerHTML = rows.map(p => `
     <tr>
@@ -488,7 +546,17 @@ socket.on('state', st => {
   if (st.anim && st.anim.seq !== lastAnimSeq) lastAnimSeq = st.anim.seq;
   render();
 });
-socket.on('closed', () => { toast('방이 닫혔습니다.'); setTimeout(leave, 1200); });
+socket.on('closed', () => {
+  /* 선생님은 관전만 하던 것이므로 관제실에 그대로 남는다 */
+  if (teacherOn) {
+    watching = ''; S = null;
+    toast('방이 닫혔습니다.');
+    renderTeacher();
+    return;
+  }
+  toast('방이 닫혔습니다.');
+  setTimeout(leave, 1200);
+});
 socket.on('rooms', rs => { LAST_ROOMS = rs; if (teacherOn && !watching) renderTeacher(); });
 socket.on('sets', ss => { SETS = ss; if (teacherOn && !watching) renderTeacher(); });
 
@@ -569,12 +637,16 @@ function renderTeacher() {
       <div class="row" style="margin-top:8px">
         <button class="btn sm" data-watch="${r.code}">관전</button>
         <button class="btn sm ghost" data-pause="${r.code}">${r.paused ? '재개' : '일시정지'}</button>
+        <button class="btn sm danger" data-kill="${r.code}">방 없애기</button>
       </div>
     </div>`).join('');
 }
 function renderWatch() {
   $('teacherInfo').textContent = `${watching} 관전 중`;
-  $('setList').innerHTML = '';
+  $('setList').innerHTML = `<div class="row" style="max-width:360px">
+      <button class="btn sm" data-back>관전 끝내기</button>
+      <button class="btn sm danger" data-kill="${watching}">이 방 없애기</button>
+    </div>`;
   $('roomGrid').innerHTML = S ? `<div class="roomCard" style="grid-column:1/-1">
     <h4>${S.code} — ${S.round}라운드</h4>
     <div class="pl">${S.players.map(p => `${esc(p.name)} — 말 ${p.pieces.filter(x => x.pos === 99).length}/${p.pieces.length} 도착 · 증강 ${(p.augs || []).length}개${p.eliminated ? ' (탈락)' : ''}`).join('<br>')}</div>
@@ -584,7 +656,18 @@ function renderWatch() {
 $('teacher').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
   if (b.dataset.watch) { watching = b.dataset.watch; send('teacher:watch', { code: watching }); renderTeacher(); }
+  if (b.hasAttribute('data-back')) { watching = ''; renderTeacher(); }
   if (b.dataset.pause) send('teacher:pause', { code: b.dataset.pause });
+  if (b.dataset.kill) {
+    const code = b.dataset.kill;
+    if (!confirm(`${code} 방을 없앨까요? 그 방 학생들은 모두 시작 화면으로 돌아갑니다.`)) return;
+    send('teacher:close', { code }, res => {
+      if (!res?.ok) return;
+      toast(`${code} 방을 없앴습니다.`);
+      if (watching === code) { watching = ''; S = null; }
+      renderTeacher();
+    });
+  }
   if (b.dataset.act) teacherFetch('/api/class/' + b.dataset.act + '/activate', { method: 'POST' })
     .then(d => { if (d) toast(`「${d.name}」을(를) 적용했습니다. (문제 ${d.count}개)`); });
   if (b.dataset.copy) {

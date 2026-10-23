@@ -38,6 +38,8 @@ b{font-weight:800}
 .btn.sm{padding:7px 12px;font-size:13px;border-radius:8px}
 .btn.lg{padding:14px 20px;font-size:17px;width:100%}
 .btn.ghost{background:transparent;border-color:var(--line);color:var(--sub)}
+.btn.danger{background:#F9E7E4;border-color:var(--red);color:var(--red)}
+.btn.danger:hover{background:#F4D6D1}
 .btn:disabled{opacity:.4;cursor:not-allowed;transform:none}
 .inp{
   width:100%;background:#fff;border:2px solid var(--ink);border-radius:var(--r);
@@ -134,10 +136,36 @@ details.teacherBox .panel{margin-top:10px}
 .pcard .hp{display:flex;gap:3px;align-items:center;margin-top:5px;font-size:11px;color:var(--sub)}
 .pcard .hp i{width:11px;height:11px;border:2px solid var(--ink);background:var(--red)}
 .pcard .hp i.off{background:transparent}
-.pcard .pcs{display:flex;gap:7px;margin:9px 0 4px;flex-wrap:wrap}
-.pcard .pcs i{width:26px;height:26px;border-radius:50%;border:2px solid var(--ink);display:block}
-.pcard .pcs i.home{opacity:.3}
-.pcard .pcs i.fin{border-style:double;border-width:4px}
+/* 말 목록 — 번호 · 어디 있는지 · 업혔는지 */
+.pcs{display:flex;flex-direction:column;gap:4px;margin:9px 0 4px}
+.pc{
+  display:flex;align-items:center;gap:7px;width:100%;text-align:left;
+  background:transparent;border:2px solid transparent;border-radius:9px;
+  padding:3px 5px;font:inherit;font-size:12px;color:var(--ink);cursor:default
+}
+.pc i{
+  width:24px;height:24px;flex:none;border-radius:50%;border:2px solid var(--ink);
+  display:flex;align-items:center;justify-content:center;
+  font-size:12px;font-weight:800;color:#fff;font-style:normal;
+  text-shadow:0 1px 1px rgba(0,0,0,.45)
+}
+.pc .w{color:var(--sub);font-weight:700}
+.pc .k{font-size:13px}
+.pc .st{
+  margin-left:auto;font-size:10.5px;font-weight:800;
+  border:2px solid var(--gold-d);background:#FBF0D4;color:#7A5E12;
+  border-radius:999px;padding:1px 7px;white-space:nowrap
+}
+.pc .st.hold{border-color:var(--line);background:#EDEDEA;color:var(--sub)}
+.pc.home i{opacity:.35}
+.pc.home .w{opacity:.7}
+.pc.fin i{border-style:double;border-width:4px}
+.pc.fin .w{color:var(--ok);font-weight:800}
+.pc.stack{background:#FDF8E8;border-color:#E6D7A8}
+.pc.pick{cursor:pointer;border-color:var(--ink);background:var(--card)}
+.pc.pick:hover{background:var(--gold);transform:translateX(2px)}
+.pc.pick:active{transform:translateX(0)}
+.pc[disabled]{cursor:default}
 .augs{display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-top:8px}
 .aug{
   border:2px solid var(--ink);border-radius:8px;background:var(--card);

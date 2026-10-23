@@ -89,6 +89,7 @@
     <p class="hint" id="waitInfo"></p>
     <button class="btn pri lg" id="btnStart" style="margin-top:10px">게임 시작</button>
     <button class="btn ghost lg" id="btnLeaveWait" style="margin-top:8px">나가기</button>
+    <button class="btn danger lg" id="btnKillWait" style="margin-top:8px" hidden>방 없애기</button>
   </div>
 </section>
 
@@ -215,6 +216,8 @@
       <button class="btn" id="btnAgain">메인 메뉴</button>
       <button class="btn pri" id="btnRetry">같은 설정 재경기</button>
     </div>
+    <button class="btn danger" id="btnKillRoom" style="margin-top:10px" hidden>방 없애기</button>
+    <p class="hint" id="killHint" hidden>방장이 방을 없애면 모두 시작 화면으로 돌아갑니다.</p>
   </div>
 </div>
 
@@ -224,6 +227,7 @@
     <div style="display:flex;flex-direction:column;gap:9px;margin-top:16px">
       <button class="btn" id="mnGrade">기다리지 않고 바로 채점</button>
       <button class="btn" id="mnSkip">이 차례 건너뛰기</button>
+      <button class="btn danger" id="mnKill">방 없애기</button>
       <button class="btn ghost" id="mnLeave">게임에서 나가기</button>
       <button class="btn" id="mnClose">닫기</button>
     </div>

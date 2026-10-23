@@ -792,6 +792,19 @@ io.on('connection', s => {
     advance(r);
   });
 
+  /* 방 없애기 — 방장이 직접 닫는다 */
+  s.on('closeRoom', (_, ack) => {
+    const r = rooms.get(s.data.room); if (!r) return fail(ack, '방이 없습니다.');
+    const me = r.players.find(x => x.sid === s.id);
+    if (!me || r.host !== me.id) return fail(ack, '방장만 방을 없앨 수 있습니다.');
+    clearTimer(r);
+    rooms.delete(r.code);
+    io.to(r.code).emit('closed');
+    io.to('teachers').emit('rooms', summaries());
+    dirty = true;
+    done(ack);
+  });
+
   /* 증강 선택 — 모두가 동시에 고른다 */
   s.on('choose', ({ id }, ack) => {
     const r = rooms.get(s.data.room); if (!r) return fail(ack, '방이 없습니다.');
