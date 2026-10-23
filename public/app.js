@@ -221,15 +221,48 @@ function pieceRow(p, clickable) {
     </button>`;
   }).join('') + `</div>`;
 }
+/* 증강 칸 — 누구 것이든 누르면 설명이 뜬다 */
 function augChips(p, clickable) {
   const slots = [];
-  (p.augs || []).forEach(a => {
+  (p.augs || []).forEach((a, i) => {
     const use = clickable && a.kind === 'active' && !a.spent;
-    slots.push(`<div class="aug ${a.spent ? 'spent' : ''} ${use ? 'usable' : ''} ${a.rarity === 'legend' ? 'legend' : ''}"
-      ${use ? `data-use="${a.id}"` : ''} title="${esc(a.desc || '')}">${esc(a.name)}</div>`);
+    slots.push(`<button class="aug ${a.spent ? 'spent' : ''} ${use ? 'usable' : ''} ${a.rarity === 'legend' ? 'legend' : ''}"
+      data-info="${esc(p.id)}:${i}">${esc(a.name)}${use ? '<em>쓸 수 있어요</em>' : ''}</button>`);
   });
   while (slots.length < 3) slots.push('<div class="aug empty">—</div>');
   return `<div class="augs">${slots.join('')}</div>`;
+}
+
+const RARITY_KO = { common: '일반', rare: '희귀', legend: '전설' };
+const KIND_KO = { passive: '늘 적용', instant: '얻는 즉시', active: '눌러서 사용' };
+
+/* 증강 설명 창 */
+function showAugInfo(playerId, idx) {
+  const p = S?.players.find(x => x.id === playerId); if (!p) return;
+  const a = (p.augs || [])[idx]; if (!a) return;
+  const mine = p.id === me?.id;
+  const canUse = mine && isMyTurn() && !S.pending && a.kind === 'active' && !a.spent && S.status === 'playing';
+  $('abilTitle').textContent = a.name;
+  $('abilDesc').innerHTML =
+    `<span class="tagRow"><b>${esc(a.group)}</b> · ${RARITY_KO[a.rarity] || ''} · ${KIND_KO[a.kind] || ''}` +
+    `${a.win ? ' · <b style="color:var(--red)">특수 승리</b>' : ''}</span>`;
+  $('abilBody').innerHTML = `
+    <div class="augInfo">
+      <p class="d">${esc(a.desc)}</p>
+      ${a.when ? `<p class="w"><b>이럴 때 좋아요</b><br>${esc(a.when)}</p>` : ''}
+      ${a.kind === 'passive' ? '<p class="s">가만히 있어도 계속 적용돼요.</p>'
+        : a.kind === 'instant' ? '<p class="s">얻을 때 이미 한 번 발동했어요.</p>'
+        : a.spent ? '<p class="s">이미 다 썼어요. 다시 쓸 수 없습니다.</p>'
+        : canUse ? '' : '<p class="s">내 차례에 누르면 쓸 수 있어요.</p>'}
+    </div>
+    ${canUse ? '<button class="btn pri" data-usenow>지금 사용하기</button>' : ''}`;
+  $('abilCancel').textContent = '닫기';
+  $('abilBody').onclick = ev => {
+    if (!ev.target.closest('[data-usenow]')) return;
+    closeAbility();
+    openAbility(a.id);
+  };
+  $('ovAbility').hidden = false;
 }
 function hpRow(p) {
   if (p.health == null && p.claps == null && !(p.coins?.dog)) return '';
@@ -335,8 +368,8 @@ document.addEventListener('click', e => {
   if (th) return send('throw', { choose: th.dataset.throw || undefined });
   const py = e.target.closest('[data-pickyut]');
   if (py) return send('throw', { choose: +py.dataset.pickyut });
-  const us = e.target.closest('[data-use]');
-  if (us) return openAbility(us.dataset.use);
+  const inf = e.target.closest('[data-info]');
+  if (inf) { const [pid, i] = inf.dataset.info.split(':'); return showAugInfo(pid, +i); }
   const pc = e.target.closest('[data-piece]');
   if (pc) return send('move', { piece: +pc.dataset.piece });
 });
@@ -424,20 +457,70 @@ function renderBattle(p) {
   if ($('btnGrade')) $('btnGrade').onclick = () => send('gradeNow', {});
 }
 
+/* 지금 내 상황을 읽어 어떤 갈래가 쓸모 있는지 고른다 */
+function myNeeds() {
+  const my = myP();
+  if (!my) return { tags: [], tip: '' };
+  const alive = S.players.filter(x => !x.eliminated);
+  const progs = alive.map(x => x.progress);
+  const avg = progs.reduce((a, b) => a + b, 0) / Math.max(1, progs.length);
+  const best = Math.max(...progs, 0);
+  const onBoard = my.pieces.filter(x => x.pos >= 0 && x.pos !== 99);
+  const tags = [], why = [];
+
+  /* 내 말이 곧 잡힐 자리에 있나 — 상대 말이 1~5칸 뒤에 있는지 */
+  let danger = false;
+  const mine = onBoard.filter(x => x.pos < 20).map(x => x.pos);
+  alive.forEach(x => {
+    if (x.id === my.id) return;
+    x.pieces.forEach(e => {
+      if (e.pos < 0 || e.pos >= 20) return;
+      mine.forEach(m => { const d = (m - e.pos + 20) % 20; if (d >= 1 && d <= 5) danger = true; });
+    });
+  });
+
+  if (danger) { tags.push('수비'); why.push('내 말이 잡힐 자리에 있어요'); }
+  if (my.progress < avg - 1) { tags.push('이동', '윷', '승리'); why.push('지금 뒤처져 있어요'); }
+  else if (my.progress >= best && alive.length > 1) { tags.push('수비', '공격'); why.push('지금 앞서 있어요'); }
+  if (!onBoard.length) { tags.push('이동', '시작'); why.push('아직 판에 말이 없어요'); }
+  if (S.round >= 7) { tags.push('마무리'); why.push('게임이 막바지예요'); }
+
+  return { tags: [...new Set(tags)], tip: why[0] || '' };
+}
+
 function renderChoose(p) {
   const list = p.offers[me?.id] || [];
+  const need = myNeeds();
   $('chooseTitle').textContent = `${p.round}라운드 증강 선택`;
   $('chooseSub').textContent = (p.phaseLabel ? `${p.phaseLabel} · ` : '') + '이 후보는 나에게만 보입니다. 세 장 중 하나를 고르세요.';
-  $('augPick').innerHTML = list.map(a => `
-    <button class="augCard ${a.rarity === 'legend' ? 'legend' : ''}" data-pick="${a.id}">
+
+  $('augPick').innerHTML = list.map(a => {
+    const fit = need.tags.includes(a.group);
+    return `
+    <button class="augCard ${a.rarity === 'legend' ? 'legend' : ''} ${fit ? 'fit' : ''}" data-pick="${a.id}">
+      ${fit ? '<span class="rec">지금 쓸모 있어요</span>' : ''}
       <span class="nm">${esc(a.name)}</span>
       <span class="ds">${esc(a.desc)}</span>
-      <span class="tag">${esc(a.group)} · ${a.rarity === 'legend' ? '전설' : a.rarity === 'rare' ? '희귀' : '일반'}</span>
-    </button>`).join('');
+      ${a.when ? `<span class="wh">이럴 때 좋아요<br>${esc(a.when)}</span>` : ''}
+      <span class="tag">${esc(a.group)} · ${a.rarity === 'legend' ? '전설' : a.rarity === 'rare' ? '희귀' : '일반'}${a.win ? ' · 특수 승리' : ''}</span>
+    </button>`;
+  }).join('');
+
   $('augPick').querySelectorAll('[data-pick]').forEach(b => b.onclick = () => {
     b.classList.add('sel');
     send('choose', { id: b.dataset.pick });
   });
+
+  /* 고르는 요령 */
+  $('chooseGuide').innerHTML = `
+    <div class="guideHead">${need.tip ? `<b>${esc(need.tip)}</b> — 아래 요령을 보고 고르세요.` : '고르는 요령'}</div>
+    <div class="guideRow">
+      <span><b>뒤처졌다면</b> 이동 · 윷 · 특수 승리</span>
+      <span><b>앞서고 있다면</b> 수비 · 공격</span>
+      <span><b>잡힐 것 같다면</b> 수비</span>
+      <span><b>모르겠다면</b> 설명이 쉬운 것</span>
+    </div>`;
+
   const waiting = Object.keys(p.offers).filter(id => !(p.picked || []).includes(id)).length;
   $('chooseWait').textContent = waiting > 1 ? `아직 고르는 중인 친구 ${waiting}명` : '';
 }
@@ -512,6 +595,7 @@ function openAbility(id) {
        <button class="btn pri" data-go style="margin-top:8px">이 순서로 확정</button>`;
   }
   $('abilBody').innerHTML = body;
+  $('abilCancel').textContent = '취소';
 
   const order = [];
   $('abilBody').onclick = ev => {

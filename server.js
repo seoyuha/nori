@@ -65,8 +65,9 @@ function byId(r, id) { return r.players.find(p => p.id === id); }
 function augView(p) {
   return (p.augs || []).map(a => {
     const d = augById(a.id) || {};
-    return { id: a.id, name: d.name, icon: d.icon, desc: d.desc, group: d.group, rarity: d.rarity,
-             kind: d.kind, needs: FX.NEEDS[a.id] || 'none', uses: a.uses, spent: !!a.spent };
+    return { id: a.id, name: d.name, icon: d.icon, desc: d.desc, when: d.when, group: d.group,
+             rarity: d.rarity, kind: d.kind, phase: d.phase, win: !!d.win,
+             needs: FX.NEEDS[a.id] || 'none', uses: a.uses, spent: !!a.spent };
   });
 }
 
@@ -471,7 +472,8 @@ function offerAugments(r, player, bonusOnly) {
   }
   /* 간택 — 고양이가 보이면 고양이만 고를 수 있다 */
   if (r.catRule && picked.some(a => a.id === 'cat')) return picked.filter(a => a.id === 'cat');
-  return picked.map(a => ({ id: a.id, name: a.name, icon: a.icon, desc: a.desc, rarity: a.rarity, group: a.group }));
+  return picked.map(a => ({ id: a.id, name: a.name, icon: a.icon, desc: a.desc, when: a.when,
+                            rarity: a.rarity, group: a.group, kind: a.kind, win: !!a.win }));
 }
 
 /* ============================================================
