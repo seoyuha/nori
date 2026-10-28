@@ -519,6 +519,50 @@ export function checkSpecialWin(r, p, api) {
   return false;
 }
 
+/* ───────────────────────── 조건이 얼마나 찼나 ─────────────────────────
+   숫자로 셀 수 있는 조건만 돌려준다. { now, goal, label } */
+export function progressOf(r, p, augId, all) {
+  const f = F(p), s = S(p);
+  const alive = (all || []).filter(x => !x.eliminated);
+  switch (augId) {
+    case 'streak4':  return { now: Math.min(4, s.captured || 0), goal: 4, label: '상대 말 잡기' };
+    case 'choir':    return { now: Math.min(12, s.claps || 0), goal: 12, label: '박수' };
+    case 'ungnyeo':  return { now: Math.min(3, s.garlic || 0), goal: 3, label: '마늘', seg: true };
+    case 'backstep': return { now: Math.min(2, s.backdoCaptures || 0), goal: 2, label: '백도로 잡기' };
+    case 'score':    return { now: (s.yutSeen || []).length, goal: 6, label: '모은 윷 (백도·도·개·걸·윷·모)', seg: true };
+    case 'nofriend': return { now: (s.caughtBy || []).length, goal: Math.max(1, alive.length - 1), label: '나를 잡은 친구', seg: true };
+    case 'samok': {
+      const pos = p.pieces.filter(onBoard).map(x => x.pos);
+      const biggest = Math.max(0, ...pos.map(c => G.groupAt(p, c).length));
+      let run = 0;
+      for (const line of G.LINES) {
+        let k = 0;
+        for (const cell of line) { k = pos.includes(cell) ? k + 1 : 0; if (k > run) run = k; }
+      }
+      return { now: Math.max(run, biggest), goal: 4, label: '한 줄로 이어진 말' };
+    }
+    case 'doberman': return { now: p.coins?.dog || 0, goal: 2, label: '개 코인 (2개면 모)' };
+    case 'jajinmori': return { now: (s.geol || 0) % 2, goal: 2, label: '걸 (2번이면 개)' };
+    case 'fisherman': return { now: (s.foeLost || 0) % 2, goal: 2, label: '잡힌 남의 말' };
+    case 'triple7': {
+      const t = s.throwsThisTurn || [];
+      const cnt = {}; t.forEach(v => cnt[v] = (cnt[v] || 0) + 1);
+      return { now: Math.max(0, ...Object.values(cnt)), goal: 3, label: '이번 차례 같은 결과' };
+    }
+    case 'queen':    return { now: Math.min(12, s.queenThrows || 0), goal: 12, label: '지킨 던지기' };
+    case 'kimcheomji': {
+      if (s.kimStart == null) return null;
+      return { now: Math.min(6, r.round - s.kimStart), goal: 6, label: '남은 차례 안에 완주' };
+    }
+    case 'onlyone': {
+      let stacks = 0;
+      (all || []).forEach(t => { const seen = new Set(); t.pieces.forEach(x => { if (onBoard(x)) seen.add(x.pos); }); stacks += seen.size; });
+      return { now: stacks, goal: 1, label: '윷판에 남은 말뭉치', down: true };
+    }
+    default: return null;
+  }
+}
+
 /* ───────────────────────── 도우미 ───────────────────────── */
 export const onBoard = x => x.pos >= 0 && x.pos !== G.FINISH;
 

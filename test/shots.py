@@ -24,6 +24,7 @@ try:
             pg.on('pageerror', lambda e: errors.append(str(e)))
             pg.on('console', lambda m: errors.append('console: ' + m.text) if m.type == 'error' else None)
             pg.goto(URL)
+            pg.evaluate("() => document.querySelectorAll('details.moreBox').forEach(d=>d.open=true)")
             pages.append(pg)
 
         host, b, c = pages
@@ -119,6 +120,7 @@ try:
         # ── 교사 관제실 ──
         t = br.new_context(viewport={'width': 1280, 'height': 860}).new_page()
         t.goto(URL)
+        t.evaluate("() => document.querySelectorAll('details.moreBox').forEach(d=>d.open=true)")
         t.click('details.teacherBox summary')
         t.fill('#teacherPin', 'testpin')
         t.click('#btnTeacher')
@@ -129,6 +131,7 @@ try:
         # ── 휴대폰 크기 ──
         m = br.new_context(viewport={'width': 390, 'height': 780}).new_page()
         m.goto(URL)
+        m.evaluate("() => document.querySelectorAll('details.moreBox').forEach(d=>d.open=true)")
         m.fill('#myName', '학생')
         m.screenshot(path=f'{OUT}/10_휴대폰.png', full_page=True)
 

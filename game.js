@@ -86,6 +86,7 @@ export function readSticks(sticks, { backdo = true } = {}) {
 /* ---------- 한 칸 앞으로 ---------- */
 export function nextNode(pos, route) {
   if (pos === -1) return { pos: 0, route: 'outer' };          // 출발점에 올려놓기
+  if (route === 'lap') return { pos: FINISH, route: 'done' }; // 한 바퀴 돈 말 — 한 칸만 더 가면 완주
 
   if (route === 'A') {
     if (pos === 5) return { pos: SC_A[0], route: 'A' };
@@ -128,10 +129,15 @@ export function prevNode(pos, route) {
    방(중앙)에 정확히 멈추면 도착으로 가는 가장 짧은 길로 빠진다.
    steps 가 음수면 백도처럼 뒤로 간다. reverse=true 면 '달걸음'처럼 방향이 뒤집힌다. */
 export function travel(pos, route, steps, { reverse = false, stopAt = null } = {}) {
-  const back = (steps < 0) !== reverse;
+  let back = (steps < 0) !== reverse;
   const n = Math.abs(steps);
   let at = pos, rt = route || 'outer';
-  if (back && at === -1) return { pos: -1, route: 'outer' };  // 아직 안 나온 말은 뒤로 못 간다
+  /* 아직 집에 있는 말은 뒤로 갈 수 없다.
+     백도면 그대로 집에 있고, 달걸음처럼 방향이 뒤집힌 상태면 일단 앞으로 나온다. */
+  if (back && at === -1) {
+    if (steps < 0) return { pos: -1, route: 'outer' };
+    back = false;
+  }
 
   for (let k = 0; k < n; k++) {
     if (at === FINISH) break;
@@ -145,16 +151,22 @@ export function travel(pos, route, steps, { reverse = false, stopAt = null } = {
     else if (rt === 'outer' && at === 10) rt = 'B';
     else if (at === CENTER) rt = 'B';
   }
+  /* 판 위를 돌던 말이 뒤로 와서 출발지에 서면 '한 바퀴 돈 말'로 친다.
+     (도에서 백도가 나온 경우 — 다음에 앞으로 가면 바로 완주) */
+  if (back && at === 0 && pos >= 0) rt = 'lap';
   return { pos: at, route: rt };
 }
 
 /* 말이 지나갈 칸들 — 화면에서 한 칸씩 뛰어가는 애니메이션에 쓴다. */
 export function pathOf(pos, route, steps, opts = {}) {
-  const back = (steps < 0) !== !!opts.reverse;
+  let back = (steps < 0) !== !!opts.reverse;
   const n = Math.abs(steps);
   const out = [];
   let at = pos, rt = route || 'outer';
-  if (back && at === -1) return out;
+  if (back && at === -1) {
+    if (steps < 0) return out;
+    back = false;
+  }
   for (let k = 0; k < n; k++) {
     if (at === FINISH) break;
     const nx = back ? prevNode(at, rt) : nextNode(at, rt);

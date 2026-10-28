@@ -34,6 +34,13 @@
         <p class="hint">1~12자</p>
       </div>
 
+      <!-- 자동 배정 — 학생은 이름만 쓰고 누르면 모둠이 저절로 나뉜다 -->
+      <button class="btn pri lg" id="btnAuto">자동으로 모둠 들어가기</button>
+      <p class="hint" id="autoHint" style="margin-bottom:14px">선생님이 정한 인원수대로 모둠이 저절로 나뉘고, 다 모이면 바로 시작해요.</p>
+
+      <details class="moreBox">
+        <summary>직접 방 만들기 / 방 코드로 들어가기</summary>
+
       <div class="seg" id="modeSeg">
         <button class="btn on" data-mode="simple">간편 수업<small>쉬운 증강만</small></button>
         <button class="btn" data-mode="full">본격 증강<small>71종 전부</small></button>
@@ -57,6 +64,7 @@
           <button class="btn" id="btnJoin" style="flex:0 0 110px">참가</button>
         </div>
       </div>
+      </details>
     </div>
 
     <details class="teacherBox">
@@ -101,6 +109,21 @@
     <button class="btn sm menu" id="btnMenu">☰</button>
   </header>
 
+  <!-- 차례 순서 띠와 초시계 -->
+  <div class="topBar">
+    <div class="turnStrip" id="turnStrip"></div>
+    <svg class="clock" id="clock" viewBox="0 0 100 114" role="img" aria-label="남은 시간" hidden>
+      <rect class="crown" x="43" y="0" width="14" height="10" rx="3.5"/>
+      <line class="nub" x1="21" y1="13" x2="27" y2="19"/>
+      <line class="nub" x1="79" y1="13" x2="73" y2="19"/>
+      <circle class="face" cx="50" cy="62" r="45"/>
+      <g id="clockTicks"></g>
+      <line class="hand" id="clockHand" x1="50" y1="62" x2="50" y2="26"/>
+      <circle class="pin" cx="50" cy="62" r="4"/>
+      <text id="clockNum" x="50" y="88" text-anchor="middle">0</text>
+    </svg>
+  </div>
+
   <div class="stage">
     <div class="left" id="leftCol"></div>
 
@@ -114,6 +137,7 @@
         <div class="yutRow" id="yutRow"><i></i><i></i><i></i><i></i></div>
         <div class="rollName" id="rollName">—</div>
         <div class="rollSub" id="rollSub">내 차례를 기다리는 중</div>
+        <div class="throwsLeft" id="throwsLeft" hidden></div>
         <div id="rollActs" style="margin-top:10px"></div>
       </div>
       <div class="act" id="actHint"></div>
@@ -121,11 +145,6 @@
     </aside>
   </div>
 
-  <svg class="clock" id="clock" viewBox="0 0 100 100" hidden>
-    <circle class="face" cx="50" cy="50" r="45" fill="#FCFCFA" stroke="#6B3A2E" stroke-width="5"/>
-    <g id="clockTicks"></g>
-    <text id="clockNum" x="50" y="58" text-anchor="middle" font-size="24" font-weight="800" fill="#1A1A1A">0</text>
-  </svg>
 </section>
 
 <!-- ══════════ 교사 관제실 ══════════ -->
@@ -156,7 +175,25 @@
           <button class="btn pri" id="btnMakeClass" style="flex:0 0 100px">만들기</button>
           <button class="btn ghost sm" id="btnCancelSet" style="flex:0 0 70px">취소</button>
         </div>
-        <p class="hint">엑셀 양식을 먼저 내려받아 문제를 채운 뒤 올리세요. 엑셀을 안 넣으면 기본 문제가 들어갑니다.</p>
+        <div class="row" style="margin-top:8px">
+          <select id="classSize" class="inp">
+            <option value="2">모둠 2명씩</option>
+            <option value="3">모둠 3명씩</option>
+            <option value="4" selected>모둠 4명씩</option>
+            <option value="5">모둠 5명씩</option>
+          </select>
+          <select id="classMode" class="inp">
+            <option value="full" selected>본격 증강 (71종)</option>
+            <option value="simple">간편 수업</option>
+          </select>
+          <select id="classPieces" class="inp">
+            <option value="2">말 2개</option>
+            <option value="3">말 3개</option>
+            <option value="4" selected>말 4개</option>
+          </select>
+        </div>
+        <p class="hint">엑셀 양식을 먼저 내려받아 문제를 채운 뒤 올리세요. 엑셀을 안 넣으면 기본 문제가 들어갑니다.<br>
+          학생이 주소로 들어와 <b>자동으로 모둠 들어가기</b>를 누르면 여기서 정한 인원수대로 모둠이 나뉘고, 다 모이면 저절로 시작합니다.</p>
         <div id="classOut"></div>
       </div>
     </div>
@@ -194,6 +231,18 @@
     <p class="sub" id="abilDesc"></p>
     <div class="targets" id="abilBody"></div>
     <button class="btn ghost" id="abilCancel">취소</button>
+  </div>
+</div>
+
+<div class="ov" id="ovConfirm" hidden>
+  <div class="sheet" style="max-width:420px">
+    <div class="eyebrow" id="cfKind">확인</div>
+    <h2 id="cfTitle"></h2>
+    <p class="sub" id="cfSub"></p>
+    <div style="display:flex;flex-direction:column;gap:9px;margin-top:14px">
+      <button class="btn pri lg" id="cfYes">말 이동시키기</button>
+      <button class="btn ghost" id="cfNo">말 선택 바꾸기</button>
+    </div>
   </div>
 </div>
 

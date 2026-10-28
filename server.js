@@ -62,12 +62,53 @@ function byId(r, id) { return r.players.find(p => p.id === id); }
 
 /* ---------- 상태 내려보내기 ----------
    정답 번호와 해설은 채점이 끝나기 전에는 절대 내려보내지 않는다. */
-function augView(p) {
+/* 윷을 던진 뒤, 각 말이 어디로 갈지 미리 계산한다 (실제 이동과 같은 규칙) */
+function movePreview(r) {
+  if (!r.roll || r.roll.choices || r.pending || r.status !== 'playing') return null;
+  const p = cur(r);
+  if (!p || p.eliminated || p.rank) return null;
+  const steps = FX.stepsFor(r, p, r.roll.v);
+  const opts = { reverse: !!p.flags?.reverse, stopAt: FX.mudCells(r) };
+  const list = [];
+  p.pieces.forEach((pc, i) => {
+    const no = i + 1;
+    if (pc.pos === FINISH) return list.push({ i, no, skip: '이미 도착' });
+    if (pc.frozen > 0) return list.push({ i, no, skip: '묶여 있음' });
+    if (pc.locked) return list.push({ i, no, skip: '고정됨' });
+    if (pc.kind === 'pawn') return list.push({ i, no, skip: '폰은 저절로' });
+    if (steps === 0) return list.push({ i, no, skip: '움직일 수 없음' });
+    if (steps < 0 && pc.pos < 0) return list.push({ i, no, skip: '아직 집' });
+
+    const dest = travel(pc.pos, pc.route, steps, opts);
+    if (dest.pos === pc.pos) return list.push({ i, no, skip: '움직일 수 없음' });
+    const group = p.flags?.noStack ? [] : groupAt(p, pc.pos).map(x => x.i);
+    const movers = group.length || 1;
+
+    let capture = 0;
+    r.players.forEach(o => {
+      if (o.id === p.id || o.eliminated) return;
+      o.pieces.forEach(x => { if (x.pos === dest.pos && FX.onBoard(x)) capture++; });
+    });
+    const own = dest.pos !== FINISH && p.pieces.some((x, k) =>
+      k !== i && !group.includes(k) && x.pos === dest.pos && FX.onBoard(x));
+    const tile = (r.tiles || []).find(t => t.pos === dest.pos);
+
+    list.push({
+      i, no, to: dest.pos, finish: dest.pos === FINISH,
+      capture, own, movers, tile: tile ? tile.type : null
+    });
+  });
+  return { player: p.id, steps, list };
+}
+
+function augView(p, r) {
   return (p.augs || []).map(a => {
     const d = augById(a.id) || {};
+    let prog = null;
+    try { prog = r ? FX.progressOf(r, p, a.id, r.players) : null; } catch (e) { prog = null; }
     return { id: a.id, name: d.name, icon: d.icon, desc: d.desc, when: d.when, group: d.group,
              rarity: d.rarity, kind: d.kind, phase: d.phase, win: !!d.win,
-             needs: FX.NEEDS[a.id] || 'none', uses: a.uses, spent: !!a.spent };
+             needs: FX.NEEDS[a.id] || 'none', uses: a.uses, spent: !!a.spent, prog };
   });
 }
 
@@ -96,14 +137,16 @@ function view(r, forTeacher) {
     turn: r.turn, round: r.round, roll: r.roll, winner: r.winner, winners: r.winners || [], host: r.host,
     tiles: r.tiles || [], fog: r.fog || 0, hidden: r.hidden || 0, rotation: r.rotation || 0,
     quizEvery: r.quizEvery, turnDeadline: r.turnDeadline,
+    auto: !!r.auto, autoSize: r.autoSize || null,
     anim: r.anim || null,
     players: r.players.map(x => ({
       id: x.id, name: x.name, color: x.color, animal: x.animal, connected: !!x.sid,
-      pieces: x.pieces, augs: augView(x), correct: x.correct, total: x.total,
+      pieces: x.pieces, augs: augView(x, r), correct: x.correct, total: x.total,
       speed: x.speed, progress: progressOf(x), throws: x.throws || 0,
       eliminated: !!x.eliminated, health: x.health, rank: x.rank, winReason: x.winReason || null,
       coins: x.coins || {}, claps: x.stats?.claps ?? null, skip: x.skip || 0
     })),
+    preview: movePreview(r),
     pending, log: r.log.slice(-20), teacher: !!forTeacher,
     board: { coord: COORD, corners: CORNERS, ring: RING, scA: SC_A, scB: SC_B, center: CENTER, lines: LINES }
   };
@@ -562,11 +605,14 @@ function applyMove(r, player, pieceIdx, steps) {
   const from = piece.pos, fromRoute = piece.route;
 
   const dest = travel(piece.pos, piece.route, steps, opts);
+  if (dest.pos === piece.pos) return '그 말은 지금 움직일 수 없습니다.';
   const trail = pathOf(piece.pos, piece.route, steps, opts);
   movers.forEach(i => { player.pieces[i].pos = dest.pos; player.pieces[i].route = dest.route; });
 
   r.anim = { player: player.id, pieces: movers, trail, seq: (r.anim?.seq || 0) + 1 };
   if (movers.length > 1) log(r, `${player.name}의 말 ${movers.length}개가 업혀서 함께 이동!`);
+  if (dest.route === 'lap')
+    log(r, `🚩 ${player.name}의 말이 한 바퀴 돈 것으로 쳐서 출발지에 섰습니다. 앞으로 가면 바로 완주!`);
 
   if (dest.pos === FINISH) {
     const kinds = movers.map(i => player.pieces[i].kind);
@@ -653,6 +699,52 @@ io.on('connection', s => {
     addPlayer(r, s, name, id);
     done(ack, { code, id });
     push(r);
+  });
+
+  /* 자동 배정 — 수업 링크로 들어온 학생을 모둠 방에 알아서 나눠 넣는다.
+     빈 자리가 있는 방부터 채우고, 없으면 새 방을 만든다. 정원이 차면 저절로 시작. */
+  s.on('autoJoin', ({ classCode, name }, ack) => {
+    name = String(name || '').trim().slice(0, 12);
+    if (!name) return fail(ack, '이름을 입력하세요.');
+    const cls = classes.get(String(classCode || activeSet || 'BASE').toUpperCase()) || classes.get('BASE');
+    const size = Math.min(5, Math.max(2, Number(cls?.size) || 4));
+
+    /* 같은 수업에서 자리가 남은 방 — 많이 찬 방부터 채운다 */
+    const open = [...rooms.values()]
+      .filter(r => r.auto && r.status === 'waiting' && r.classCode === (cls?.code || null)
+                && r.players.length < size)
+      .sort((a, b) => b.players.length - a.players.length || a.createdAt - b.createdAt);
+
+    const id = crypto.randomUUID();
+    let r = open[0];
+    if (!r) {
+      const full = (cls?.mode || 'full') === 'full';
+      const code = newCode();
+      r = {
+        code, mode: full ? 'full' : 'simple', status: 'waiting', paused: false,
+        players: [], turn: 0, round: 0, roll: null, pending: null, log: [], winner: null, winners: [],
+        host: id, tiles: [], bannedAug: [], fog: 0, hidden: 0, rotation: 0,
+        catRule: false, echo: false, lifeOwner: null, duel: null, createdAt: Date.now(),
+        pieceCount: Math.min(4, Math.max(2, Number(cls?.pieces) || (full ? 4 : 3))),
+        quizEvery: full ? 1 : 2,
+        bank: cls ? cls.bank : null,
+        classCode: cls ? cls.code : null, className: cls ? cls.name : null,
+        chooseQueue: [], auto: true, autoSize: size
+      };
+      rooms.set(code, r);
+      addPlayer(r, s, name, id);
+      log(r, `🪄 ${size}명이 모이면 저절로 시작합니다.`);
+    } else {
+      addPlayer(r, s, name, id);
+    }
+    done(ack, { code: r.code, id, size, waiting: size - r.players.length });
+
+    /* 정원이 차면 바로 시작 */
+    if (r.players.length >= (r.autoSize || size) && r.status === 'waiting') {
+      r.status = 'playing'; r.turn = 0; r.round = 0;
+      log(r, '모두 모였습니다. 게임 시작!');
+      startRound(r);
+    } else push(r);
   });
 
   s.on('join', ({ code, name }, ack) => {
@@ -1085,18 +1177,24 @@ app.post('/api/class',
         });
       }
     }
+    const size = Math.min(5, Math.max(2, Number(req.query.size) || 4));
+    const mode = req.query.mode === 'simple' ? 'simple' : 'full';
+    const pieces = Math.min(4, Math.max(2, Number(req.query.pieces) || (mode === 'full' ? 4 : 3)));
     let code; do { code = crypto.randomBytes(2).toString('hex').toUpperCase(); } while (classes.has(code));
-    classes.set(code, { code, name, bank: questions, createdAt: Date.now() });
+    classes.set(code, { code, name, bank: questions, createdAt: Date.now(), size, mode, pieces });
     dirty = true;
     io.to('teachers').emit('sets', setList());
-    res.json({ ok: true, code, name, count: questions.length, skipped: skipped.slice(0, 10) });
+    res.json({ ok: true, code, name, count: questions.length, size, mode, pieces, skipped: skipped.slice(0, 10) });
   });
 
 /* 학생이 수업 링크로 들어왔을 때 수업 정보 */
 app.get('/api/class/:code', (req, res) => {
   const c = classes.get(String(req.params.code || '').toUpperCase());
   if (!c) return res.status(404).json({ error: '수업을 찾을 수 없습니다. 주소를 다시 확인하세요.' });
-  res.json({ ok: true, code: c.code, name: c.name, count: c.bank.length });
+  res.json({
+    ok: true, code: c.code, name: c.name, count: c.bank.length,
+    size: c.size || 4, mode: c.mode || 'full', pieces: c.pieces || 4
+  });
 });
 
 app.get('/healthz', (_, res) => res.json({

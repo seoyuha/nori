@@ -53,6 +53,20 @@ $('btnCreate').onclick = () => {
     if (res?.ok) { me = { code: res.code, id: res.id }; localStorage.setItem('yutMe', JSON.stringify(me)); }
   });
 };
+/* 자동 배정 — 이름만 쓰면 빈 자리가 있는 모둠에 알아서 들어간다 */
+$('btnAuto').onclick = () => {
+  const name = $('myName').value.trim();
+  if (!name) return toast('닉네임을 먼저 써 주세요.');
+  localStorage.setItem('yutName', name);
+  $('btnAuto').disabled = true;
+  send('autoJoin', { classCode: CLASS_CODE || undefined, name }, res => {
+    $('btnAuto').disabled = false;
+    if (!res?.ok) return;
+    me = { code: res.code, id: res.id };
+    localStorage.setItem('yutMe', JSON.stringify(me));
+    toast(res.waiting > 0 ? `${res.code} 모둠 · ${res.waiting}명 더 모이면 시작해요` : `${res.code} 모둠에 들어갔어요`);
+  });
+};
 $('btnJoin').onclick = () => {
   const name = $('myName').value.trim();
   if (!name) return toast('닉네임을 먼저 써 주세요.');
@@ -92,6 +106,7 @@ if (CLASS_CODE) {
     if (!d || d.error) return;
     $('classBanner').hidden = false;
     $('classBanner').innerHTML = `이 주소의 문제 세트 — <b>${esc(d.name)}</b> (문제 ${d.count}개)`;
+    $('autoHint').textContent = `${d.size || 4}명씩 모둠이 저절로 나뉘고, 다 모이면 바로 시작해요.`;
   }).catch(() => { });
 }
 
@@ -136,6 +151,21 @@ function drawBoard() {
     if (t) g += `<text x="${xy[0]}" y="${xy[1] - 24}" text-anchor="middle" font-size="19">${TILE_ICON[t.type] || '•'}</text>`;
   }
 
+  /* 내 말이 갈 자리 — 윷을 던진 뒤에만 */
+  const canMove = isMyTurn() && !S.pending && S.status === 'playing';
+  if (canMove && S.preview && S.preview.player === me?.id) {
+    S.preview.list.forEach(pv => {
+      if (pv.skip || pv.to == null || pv.finish) return;
+      const xy = nodeXY(co, pv.to); if (!xy) return;
+      /* 점선 고리를 눌러서도 옮길 수 있다 */
+      g += `<circle cx="${xy[0]}" cy="${xy[1]}" r="26" fill="transparent" class="dest"
+        stroke="${pv.capture ? '#C0392B' : '#2E9E63'}" stroke-width="3.5" stroke-dasharray="7 6"
+        data-piece="${pv.i}" style="cursor:pointer"/>`;
+      g += `<text x="${xy[0]}" y="${xy[1] - 33}" text-anchor="middle" font-size="15" font-weight="800"
+        fill="${pv.capture ? '#C0392B' : '#1C6B45'}" style="paint-order:stroke" stroke="#FCFCFA" stroke-width="4">${pv.no}번${pv.capture ? ' 잡기' : ''}</text>`;
+    });
+  }
+
   /* 말 */
   const spots = {};
   S.players.forEach(p => p.pieces.forEach((pc, i) => {
@@ -148,8 +178,9 @@ function drawBoard() {
     const here = spots[pos];
     const groups = {};
     here.forEach(x => {
-      const g0 = (groups[x.p.id] ||= { p: x.p, n: 0, kinds: [], idx: [] });
+      const g0 = (groups[x.p.id] ||= { p: x.p, n: 0, kinds: [], idx: [], lap: false });
       g0.n++; g0.kinds.push(x.pc.kind); g0.idx.push(x.i);
+      if (x.pc.route === 'lap') g0.lap = true;
     });
     const list = Object.values(groups);
     list.forEach((grp, gi) => {
@@ -159,7 +190,11 @@ function drawBoard() {
       const hide = fogOn && !mine;
       /* 업힌 말은 바깥에 테두리를 한 겹 더 둘러 한눈에 보이게 한다 */
       if (grp.n > 1) g += `<circle cx="${cx}" cy="${cy}" r="19.5" fill="none" stroke="#1A1A1A" stroke-width="2"/>`;
-      g += `<circle cx="${cx}" cy="${cy}" r="15" fill="${hide ? '#C9CDC7' : grp.p.color}" stroke="#1A1A1A" stroke-width="2.5"/>`;
+      /* 내 차례면 말판 위의 내 말을 바로 눌러 옮길 수 있다 */
+      const pick = mine && canMove && grp.idx.map(k => previewFor(grp.p, k)).find(v => v && !v.skip);
+      const tap = pick ? ` data-piece="${pick.i}" style="cursor:pointer"` : '';
+      if (pick) g += `<circle cx="${cx}" cy="${cy}" r="22" fill="none" stroke="#E3B949" stroke-width="3"${tap}/>`;
+      g += `<circle cx="${cx}" cy="${cy}" r="15" fill="${hide ? '#C9CDC7' : grp.p.color}" stroke="#1A1A1A" stroke-width="2.5"${tap}/>`;
       if (!hide) {
         /* 혼자면 말 번호, 업혔으면 번호를 가운뎃점으로 잇고, 셋 이상이면 개수로 */
         const ns = grp.idx.map(i => i + 1);
@@ -167,6 +202,11 @@ function drawBoard() {
         g += `<text x="${cx}" y="${cy + 5}" text-anchor="middle" font-size="${ns.length === 2 ? 11 : 13}" font-weight="800" fill="#fff" style="paint-order:stroke" stroke="#1A1A1A" stroke-width="2.5">${label}</text>`;
         const special = grp.kinds.find(k => k && k !== 'normal');
         if (special) g += `<text x="${cx}" y="${cy - 19}" text-anchor="middle" font-size="14">${kindIcon(special)}</text>`;
+        /* 한 바퀴 돈 말에는 노란 깃발 — 이제 막 나온 말과 구분 */
+        if (grp.lap) g += `<g transform="translate(${cx + 13},${cy - 20})">
+          <line x1="0" y1="0" x2="0" y2="15" stroke="#1A1A1A" stroke-width="2.2" stroke-linecap="round"/>
+          <path d="M0.8 0.5 L12 4.2 L0.8 8" fill="#E3B949" stroke="#1A1A1A" stroke-width="1.8" stroke-linejoin="round"/>
+        </g>`;
       }
     });
   }
@@ -181,9 +221,12 @@ const kindIcon = k => KIND_ICON[k] || '';
    플레이어 카드
    ============================================================ */
 /* 말 한 개를 어디에 있는지 글자로 */
+const lapped = pc => pc.route === 'lap';          /* 한 바퀴 돌아 출발지에 선 말 */
+
 function whereText(pc) {
   if (pc.pos === 99) return '도착';
   if (pc.pos < 0) return '집';
+  if (lapped(pc)) return '출발지 · 한 바퀴';
   return pc.pos + '번 칸';
 }
 
@@ -197,37 +240,77 @@ function stackMap(p) {
   return m;
 }
 
+/* 이 말이 어디로 갈지 (서버가 계산해 준 것) */
+const previewFor = (p, i) =>
+  (S.preview && S.preview.player === p.id) ? S.preview.list.find(x => x.i === i) : null;
+
+function destText(pv) {
+  if (!pv || pv.skip || pv.to == null) return '';
+  return pv.finish ? '→ 도착!' : `→ ${pv.to}번 칸`;
+}
+
 function pieceRow(p, clickable) {
   const stacks = stackMap(p);
   return `<div class="pcs">` + p.pieces.map((pc, i) => {
     const on = pc.pos >= 0 && pc.pos !== 99;
     const mates = on ? stacks[pc.pos] : null;
     const stacked = mates && mates.length > 1;
+    const pv = previewFor(p, i);
+    const movable = clickable && pv && !pv.skip;
     const cls = [
       pc.pos === 99 ? 'fin' : pc.pos < 0 ? 'home' : '',
       stacked ? 'stack' : '',
+      lapped(pc) ? 'lap' : '',
       pc.frozen > 0 || pc.locked ? 'held' : '',
-      clickable && pc.pos !== 99 ? 'pick' : ''
+      movable ? 'pick' : '',
+      pv && pv.capture ? 'hit' : ''
     ].filter(Boolean).join(' ');
     const tip = `${i + 1}번 말 · ${whereText(pc)}` +
+      (lapped(pc) ? ' · 한 바퀴 돌았어요. 앞으로 가면 바로 완주!' : '') +
       (stacked ? ` · ${mates.join('+')}번이 함께 업힘` : '') +
       (pc.kind !== 'normal' ? ` · ${PIECE_LABEL[pc.kind] || ''}` : '');
-    return `<button class="pc ${cls}" ${clickable && pc.pos !== 99 ? `data-piece="${i}"` : 'disabled'} title="${esc(tip)}">
+    const mark =
+      pv && pv.capture ? `<span class="st hit">잡기 ${pv.capture}</span>`
+      : pv && pv.finish ? '<span class="st fin">완주</span>'
+      : pv && pv.own ? '<span class="st">업기</span>'
+      : stacked ? `<span class="st">업기 ${mates.length}</span>`
+      : pc.frozen > 0 ? '<span class="st hold">묶임</span>'
+      : pc.locked ? '<span class="st hold">고정</span>' : '';
+    return `<button class="pc ${cls}" ${movable ? `data-piece="${i}"` : 'disabled'} title="${esc(tip)}">
       <i style="background:${p.color}">${i + 1}</i>
+      ${lapped(pc) ? '<span class="flag" title="한 바퀴 돌았어요">🚩</span>' : ''}
       <span class="w">${whereText(pc)}</span>
+      ${pv && !pv.skip ? `<span class="go">${destText(pv)}</span>` : ''}
       ${pc.kind !== 'normal' ? `<span class="k">${kindIcon(pc.kind)}</span>` : ''}
-      ${stacked ? `<span class="st">업기 ${mates.length}</span>` : ''}
-      ${pc.frozen > 0 ? '<span class="st hold">묶임</span>' : pc.locked ? '<span class="st hold">고정</span>' : ''}
+      ${mark}
     </button>`;
   }).join('') + `</div>`;
 }
+/* 조건이 얼마나 찼는지 — 작은 막대 */
+function progBar(pr, big) {
+  if (!pr) return '';
+  const done = pr.down ? pr.now <= pr.goal : pr.now >= pr.goal;
+  let inner;
+  if (pr.seg) {                       /* 모으는 조건은 칸을 나눠 보여 준다 */
+    inner = `<span class="segs">` + Array.from({ length: pr.goal }, (_, k) =>
+      `<i class="${k < pr.now ? 'on' : ''}"></i>`).join('') + `</span>`;
+  } else {
+    const pct = pr.down
+      ? Math.max(0, Math.min(100, 100 / Math.max(1, pr.now)))
+      : Math.max(0, Math.min(100, pr.now / pr.goal * 100));
+    inner = `<span class="bar"><i style="width:${pct}%"></i></span>`;
+  }
+  return `<span class="prog ${big ? 'big' : ''} ${done ? 'done' : ''}">
+    ${inner}<b>${pr.now}/${pr.goal}</b>${big ? `<em>${esc(pr.label)}</em>` : ''}</span>`;
+}
+
 /* 증강 칸 — 누구 것이든 누르면 설명이 뜬다 */
 function augChips(p, clickable) {
   const slots = [];
   (p.augs || []).forEach((a, i) => {
     const use = clickable && a.kind === 'active' && !a.spent;
     slots.push(`<button class="aug ${a.spent ? 'spent' : ''} ${use ? 'usable' : ''} ${a.rarity === 'legend' ? 'legend' : ''}"
-      data-info="${esc(p.id)}:${i}">${esc(a.name)}${use ? '<em>쓸 수 있어요</em>' : ''}</button>`);
+      data-info="${esc(p.id)}:${i}">${esc(a.name)}${use ? '<em>쓸 수 있어요</em>' : ''}${progBar(a.prog)}</button>`);
   });
   while (slots.length < 3) slots.push('<div class="aug empty">—</div>');
   return `<div class="augs">${slots.join('')}</div>`;
@@ -246,21 +329,36 @@ function showAugInfo(playerId, idx) {
   $('abilDesc').innerHTML =
     `<span class="tagRow"><b>${esc(a.group)}</b> · ${RARITY_KO[a.rarity] || ''} · ${KIND_KO[a.kind] || ''}` +
     `${a.win ? ' · <b style="color:var(--red)">특수 승리</b>' : ''}</span>`;
+  /* 얼마나 썼는지 */
+  const useLine =
+    a.kind === 'passive' ? '가만히 있어도 계속 적용돼요. 따로 쓰지 않아도 됩니다.'
+    : a.kind === 'instant' ? '얻을 때 이미 한 번 발동했어요.'
+    : a.spent ? '사용 횟수를 다 썼어요 (0회 남음).'
+    : `아직 안 썼어요 — ${a.uses || 1}회 쓸 수 있어요.`;
+
   $('abilBody').innerHTML = `
     <div class="augInfo">
       <p class="d">${esc(a.desc)}</p>
+      <p class="u">${esc(useLine)}</p>
+      ${a.prog ? `<p class="p"><b>${a.prog.down ? '조건까지' : '지금까지'}</b> ${progBar(a.prog, true)}</p>` : ''}
       ${a.when ? `<p class="w"><b>이럴 때 좋아요</b><br>${esc(a.when)}</p>` : ''}
-      ${a.kind === 'passive' ? '<p class="s">가만히 있어도 계속 적용돼요.</p>'
-        : a.kind === 'instant' ? '<p class="s">얻을 때 이미 한 번 발동했어요.</p>'
-        : a.spent ? '<p class="s">이미 다 썼어요. 다시 쓸 수 없습니다.</p>'
-        : canUse ? '' : '<p class="s">내 차례에 누르면 쓸 수 있어요.</p>'}
+      ${!canUse && mine && a.kind === 'active' && !a.spent ? '<p class="s">내 차례에 누르면 쓸 수 있어요.</p>' : ''}
     </div>
-    ${canUse ? '<button class="btn pri" data-usenow>지금 사용하기</button>' : ''}`;
+    ${canUse ? `<div class="askUse">
+      <p>사용하시겠습니까?</p>
+      <div class="row">
+        <button class="btn pri lg" data-yes>예</button>
+        <button class="btn ghost lg" data-no>아니오</button>
+      </div></div>` : ''}`;
   $('abilCancel').textContent = '닫기';
+  $('abilCancel').hidden = !!canUse;          /* 예/아니오가 있으면 닫기는 숨긴다 */
   $('abilBody').onclick = ev => {
-    if (!ev.target.closest('[data-usenow]')) return;
+    if (ev.target.closest('[data-no]')) return closeAbility();
+    if (!ev.target.closest('[data-yes]')) return;
     closeAbility();
-    openAbility(a.id);
+    /* 고를 것이 없는 증강이면 바로 사용, 있으면 고르는 창으로 */
+    if ((a.needs || 'none') === 'none') send('ability', { id: a.id });
+    else openAbility(a.id);
   };
   $('ovAbility').hidden = false;
 }
@@ -314,6 +412,7 @@ function render() {
     : '';
 
   renderRoll();
+  renderTurnStrip();
   $('log').innerHTML = (S.log || []).slice(-30).map(x => `<div>${esc(x.t)}</div>`).join('');
   $('log').scrollTop = $('log').scrollHeight;
 
@@ -331,18 +430,63 @@ function renderWaiting() {
       <b>${esc(p.name)}</b>${p.id === S.host ? '<span class="chip">방장</span>' : ''}</div>`));
   for (let i = S.players.length; i < 5; i++) seats.push('<div class="seat empty">비어 있음</div>');
   $('waitSeats').innerHTML = seats.join('');
-  $('waitInfo').textContent = S.players.length < 2 ? '2명 이상 모이면 시작할 수 있어요.' : '모두 모였으면 방장이 시작하세요.';
+  const left = S.auto && S.autoSize ? S.autoSize - S.players.length : 0;
+  $('waitInfo').textContent =
+    S.auto && left > 0 ? `${left}명 더 들어오면 저절로 시작해요. (먼저 시작하려면 아래 단추)`
+      : S.players.length < 2 ? '2명 이상 모이면 시작할 수 있어요.'
+        : '모두 모였으면 방장이 시작하세요.';
   const host = myP()?.id === S.host;
   $('btnStart').disabled = S.players.length < 2 || !host;
   $('btnKillWait').hidden = !host;
 }
 
+/* ── 윷가락 굴리기 ──
+   서버가 결과를 보내도 바로 보여 주지 않고, 가락이 한참 구르다 멈추게 한다. */
+let rollAnim = null, rollShownKey = '';
+const ROLL_MS = 1100;
+
+function rollKey(r) { return r ? `${r.name}|${(r.sticks || []).join('')}|${S.round}|${S.turn}` : ''; }
+
+function startRollAnim(key) {
+  stopRollAnim();
+  const row = $('yutRow');
+  const n = Math.max(4, (S.roll?.sticks?.length) || 4);
+  row.innerHTML = Array.from({ length: n }, (_, i) =>
+    `<i class="tumble ${i === 0 ? 'mark' : ''}"></i>`).join('');
+  $('rollName').textContent = '구르는 중…';
+  $('rollSub').textContent = '';
+  rollAnim = {
+    key,
+    timer: setInterval(() => {
+      row.querySelectorAll('i').forEach(el => el.classList.toggle('flat', Math.random() < 0.5));
+    }, 90),
+    end: setTimeout(() => { stopRollAnim(); rollShownKey = key; renderRoll(); }, ROLL_MS)
+  };
+}
+function stopRollAnim() {
+  if (!rollAnim) return;
+  clearInterval(rollAnim.timer); clearTimeout(rollAnim.end);
+  rollAnim = null;
+}
+
 function renderRoll() {
   const my = myP(), mine = isMyTurn(), r = S.roll;
+  const key = rollKey(r);
+
+  /* 새 결과가 왔으면 먼저 굴린다 */
+  if (r && key !== rollShownKey) {
+    if (!rollAnim || rollAnim.key !== key) startRollAnim(key);
+    $('rollActs').innerHTML = '';
+    $('actHint').textContent = '';
+    return;
+  }
+  if (!r) { stopRollAnim(); rollShownKey = ''; }
+
   const sticks = r?.sticks?.length ? r.sticks : [0, 0, 0, 0];
   $('yutRow').innerHTML = sticks.map((v, i) =>
-    `<i class="${v ? 'flat' : ''} ${i === 0 ? 'mark' : ''}"></i>`).join('');
-  $('rollName').textContent = r ? `${r.emoji} ${r.name}` : '—';
+    `<i class="${v ? 'flat' : ''} ${i === 0 ? 'mark' : ''} ${r ? 'land' : ''}"></i>`).join('');
+  $('rollName').innerHTML = r ? `${r.emoji} ${esc(r.name)}` : '—';
+  $('rollName').classList.toggle('pop', !!r);
   $('rollSub').textContent = r
     ? `${r.en}${r.v > 0 ? ` · ${r.v}칸 앞으로` : r.v === -1 ? ' · 뒤로 1칸' : ''}`
     : (mine ? '윷을 던지세요' : `${turnP()?.name || ''} 차례`);
@@ -357,9 +501,41 @@ function renderRoll() {
       <button class="btn sm" data-pickyut="1">도 (1칸)</button><button class="btn sm" data-pickyut="2">개 (2칸)</button></div>`);
   }
   $('rollActs').innerHTML = acts.join('');
-  $('actHint').textContent = !mine ? ''
-    : r ? '옮길 말의 번호를 누르세요'
-      : (my?.throws || 0) > 0 ? '' : '차례가 끝났어요';
+
+  /* 남은 던지기 기회는 늘 보이게 — 원작처럼 */
+  const tl = $('throwsLeft');
+  const left = my?.throws || 0;
+  if (S.status === 'playing' && mine) {
+    tl.hidden = false;
+    tl.innerHTML = `남은 던지기 기회 <b>${left}회</b>` +
+      (left > 1 ? '<em>말을 옮기고 한 번 더 던질 수 있어요</em>'
+        : r ? '<em>이 말을 옮기면 내 차례가 끝나요</em>' : '');
+    tl.classList.toggle('more', left > 1);
+  } else { tl.hidden = true; }
+
+  const hint = $('actHint');
+  hint.classList.toggle('turnOn', mine && S.status === 'playing' && !S.pending);
+  hint.textContent = !mine ? ''
+    : r ? '옮길 말을 누르세요 — 윷판 위의 내 말이나 초록 점선 칸을 눌러도 돼요'
+      : left > 0 ? '내 차례예요! 윷을 던지세요' : '차례가 끝났어요';
+}
+
+/* ── 차례 순서 띠 ── */
+function renderTurnStrip() {
+  const el = $('turnStrip');
+  if (!S || S.status !== 'playing') { el.innerHTML = ''; return; }
+  const n = S.players.length;
+  const dots = S.players.map((p, i) => {
+    const now = i === S.turn;
+    const out = p.eliminated || p.rank;
+    const order = ((i - S.turn) + n) % n;        /* 0 = 지금, 1 = 다음 */
+    return `<span class="tp ${now ? 'now' : ''} ${out ? 'out' : ''}" title="${esc(p.name)}">
+      <i style="background:${p.color}"></i>
+      ${now ? `<b>${esc(p.name)}</b>` : order === 1 && !out ? '<b class="nx">다음</b>' : ''}
+    </span>`;
+  }).join('<span class="ar">›</span>');
+  el.innerHTML = `<div class="tps">${dots}</div>
+    <div class="trd">${S.round}라운드 · ${(S.turn || 0) + 1}번째 차례</div>`;
 }
 
 /* 윷 던지기 · 증강 사용 버튼 */
@@ -371,8 +547,24 @@ document.addEventListener('click', e => {
   const inf = e.target.closest('[data-info]');
   if (inf) { const [pid, i] = inf.dataset.info.split(':'); return showAugInfo(pid, +i); }
   const pc = e.target.closest('[data-piece]');
-  if (pc) return send('move', { piece: +pc.dataset.piece });
+  if (pc) return tryMove(+pc.dataset.piece);
 });
+
+/* 내 말이 이미 있는 칸으로 가면 한 번 물어본다 — 원작처럼 */
+function tryMove(i) {
+  const my = myP();
+  const pv = my ? previewFor(my, i) : null;
+  if (!pv || pv.skip || !pv.own) return send('move', { piece: i });
+  const mates = my.pieces
+    .map((x, k) => (k !== i && x.pos === pv.to && x.pos >= 0 && x.pos !== 99) ? k + 1 : 0)
+    .filter(Boolean);
+  $('cfKind').textContent = '이 칸에 내 말이 있습니다';
+  $('cfTitle').textContent = `${i + 1}번 말을 ${pv.to}번 칸으로`;
+  $('cfSub').textContent = `그 칸에 내 ${mates.join('·')}번 말이 있어요. 옮기면 함께 업혀서 한 덩어리로 움직입니다.`;
+  $('cfYes').onclick = () => { $('ovConfirm').hidden = true; send('move', { piece: i }); };
+  $('cfNo').onclick = () => { $('ovConfirm').hidden = true; };
+  $('ovConfirm').hidden = false;
+}
 
 /* ============================================================
    시계
@@ -380,13 +572,17 @@ document.addEventListener('click', e => {
 function renderClock() {
   const c = $('clock');
   const dl = S?.pending?.deadline || (isMyTurn() ? S?.turnDeadline : null);
-  if (!dl || S.status !== 'playing') { c.hidden = true; clearInterval(tick); tick = null; return; }
-  c.hidden = false;
+  /* SVG 요소에는 .hidden 속성이 없다 — 반드시 attribute 로 켜고 끈다 */
+  if (!dl || S.status !== 'playing') { c.toggleAttribute('hidden', true); clearInterval(tick); tick = null; return; }
+  c.toggleAttribute('hidden', false);
   if (!$('clockTicks').innerHTML) {
     let g = '';
     for (let i = 0; i < 12; i++) {
-      const a = i * 30 * Math.PI / 180;
-      g += `<line x1="${50 + 36 * Math.sin(a)}" y1="${50 - 36 * Math.cos(a)}" x2="${50 + 41 * Math.sin(a)}" y2="${50 - 41 * Math.cos(a)}" stroke="#6B3A2E" stroke-width="2.5"/>`;
+      const a = i * 30 * Math.PI / 180, big = i % 3 === 0;
+      const r1 = big ? 33 : 36;
+      g += `<line x1="${50 + r1 * Math.sin(a)}" y1="${62 - r1 * Math.cos(a)}"
+        x2="${50 + 41 * Math.sin(a)}" y2="${62 - 41 * Math.cos(a)}"
+        stroke="#6B3A2E" stroke-width="${big ? 3.4 : 2}" stroke-linecap="round"/>`;
     }
     $('clockTicks').innerHTML = g;
   }
@@ -394,6 +590,8 @@ function renderClock() {
   const paint = () => {
     const left = Math.max(0, Math.ceil((dl - Date.now()) / 1000));
     $('clockNum').textContent = left;
+    /* 바늘이 남은 초를 가리킨다 — 60초 눈금 */
+    $('clockHand').style.transform = `rotate(${(left % 60) * 6}deg)`;
     c.classList.toggle('warn', left <= 5);
     if (left <= 0) clearInterval(tick);
   };
@@ -420,6 +618,10 @@ function renderOverlays() {
     if (S.status === 'finished') return;
     showSpecial(w);
   });
+
+  /* 차례가 넘어갔으면 확인 창은 닫는다 */
+  if (!$('ovConfirm').hidden && !(isMyTurn() && S.roll && !S.pending && S.status === 'playing'))
+    $('ovConfirm').hidden = true;
 
   $('ovWin').hidden = S.status !== 'finished';
   if (S.status === 'finished') renderRank();
@@ -596,6 +798,7 @@ function openAbility(id) {
   }
   $('abilBody').innerHTML = body;
   $('abilCancel').textContent = '취소';
+  $('abilCancel').hidden = false;
 
   const order = [];
   $('abilBody').onclick = ev => {
@@ -684,7 +887,9 @@ $('btnMakeClass').onclick = async () => {
   btn.disabled = true; btn.textContent = '올리는 중…';
   try {
     const body = f ? await f.arrayBuffer() : new ArrayBuffer(0);
-    const d = await teacherFetch('/api/class?name=' + encodeURIComponent(name), {
+    const q = `/api/class?name=${encodeURIComponent(name)}&size=${$('classSize').value}` +
+              `&mode=${$('classMode').value}&pieces=${$('classPieces').value}`;
+    const d = await teacherFetch(q, {
       method: 'POST',
       headers: { 'content-type': 'application/octet-stream' },
       body
@@ -692,7 +897,8 @@ $('btnMakeClass').onclick = async () => {
     if (!d) return;
     const url = location.origin + '/?class=' + d.code;
     $('classOut').innerHTML =
-      `<p class="hint">만들었습니다 — 문제 ${d.count}개<br>학생 주소: <b>${esc(url)}</b></p>` +
+      `<p class="hint">만들었습니다 — 문제 ${d.count}개 · 모둠 ${d.size}명씩 · ${d.mode === 'full' ? '본격 증강' : '간편 수업'} · 말 ${d.pieces}개<br>
+         학생 주소: <b>${esc(url)}</b><br>학생은 이름만 쓰고 「자동으로 모둠 들어가기」를 누르면 됩니다.</p>` +
       (d.skipped?.length ? `<p class="hint">못 읽은 줄 ${d.skipped.length}개: ${esc(d.skipped.join(', '))}</p>` : '');
     $('className').value = ''; $('classFile').value = '';
   } catch (e) {

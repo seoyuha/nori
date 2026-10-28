@@ -79,6 +79,13 @@ details.teacherBox{margin-top:18px}
 details.teacherBox summary{cursor:pointer;font-size:13px;color:var(--sub);text-align:center;list-style:none}
 details.teacherBox summary::-webkit-details-marker{display:none}
 details.teacherBox .panel{margin-top:10px}
+details.moreBox{border-top:2px dashed var(--line);padding-top:12px}
+details.moreBox summary{
+  cursor:pointer;font-size:13px;font-weight:700;color:var(--sub);
+  text-align:center;list-style:none
+}
+details.moreBox summary::-webkit-details-marker{display:none}
+details.moreBox[open] summary{margin-bottom:12px}
 .foot{text-align:center;color:var(--sub);font-size:12px;margin-top:26px;line-height:1.7}
 
 /* 윷가락 장식 */
@@ -116,6 +123,38 @@ details.teacherBox .panel{margin-top:10px}
 .hud .meta{color:var(--sub);font-size:13px;font-weight:600}
 .hud .menu{position:absolute;right:14px;top:8px}
 
+/* 위쪽 띠 — 차례 순서와 초시계 */
+.topBar{
+  display:flex;align-items:center;justify-content:center;gap:16px;
+  padding:0 14px 9px;min-height:12px
+}
+.turnStrip{display:flex;align-items:center;justify-content:center;gap:14px;flex-wrap:wrap}
+.turnStrip .tps{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.turnStrip .ar{color:#C2C6BF;font-weight:800;font-size:14px}
+.turnStrip .tp{display:flex;align-items:center;gap:5px}
+.turnStrip .tp i{
+  width:13px;height:13px;border-radius:50%;border:2px solid var(--ink);
+  display:block;transition:.18s
+}
+.turnStrip .tp.out i{opacity:.3;filter:grayscale(1)}
+.turnStrip .tp.now i{width:26px;height:26px;box-shadow:0 0 0 4px rgba(227,185,73,.45)}
+.turnStrip .tp b{font-size:14px;font-weight:800}
+.turnStrip .tp b.nx{font-size:11px;color:var(--sub);font-weight:700}
+.turnStrip .trd{
+  font-size:12px;font-weight:800;color:var(--sub);
+  border:2px solid #DDE0DB;border-radius:999px;padding:2px 10px;background:var(--card)
+}
+
+/* 남은 던지기 기회 */
+.throwsLeft{
+  margin-top:8px;font-size:13px;font-weight:700;color:var(--sub);
+  border-top:2px dashed #E4E6E1;padding-top:7px
+}
+.throwsLeft b{font-size:17px;color:var(--ink);margin-left:3px}
+.throwsLeft em{display:block;font-style:normal;font-size:11px;margin-top:2px}
+.throwsLeft.more{color:var(--gold-d)}
+.throwsLeft.more b{color:var(--gold-d)}
+
 .stage{
   flex:1;display:grid;grid-template-columns:250px minmax(0,1fr) 250px;
   gap:14px;padding:0 14px 14px;align-items:start;min-height:0
@@ -151,12 +190,44 @@ details.teacherBox .panel{margin-top:10px}
 }
 .pc .w{color:var(--sub);font-weight:700}
 .pc .k{font-size:13px}
+.pc .flag{font-size:12px;line-height:1}
+.pc.lap{border-color:var(--gold-d);background:#FDF8E8}
+.pc.lap .w{color:#7A5E12;font-weight:800}
 .pc .st{
   margin-left:auto;font-size:10.5px;font-weight:800;
   border:2px solid var(--gold-d);background:#FBF0D4;color:#7A5E12;
   border-radius:999px;padding:1px 7px;white-space:nowrap
 }
 .pc .st.hold{border-color:var(--line);background:#EDEDEA;color:var(--sub)}
+.pc .st.hit{border-color:var(--red);background:#FADFDB;color:#8E2A20}
+.pc .st.fin{border-color:var(--ok);background:#DFF2E6;color:#1C6B45}
+.pc .go{font-size:12px;font-weight:800;color:#1C6B45}
+.pc.hit .go{color:#8E2A20}
+.pc.hit.pick{border-color:var(--red)}
+.pc.hit.pick:hover{background:#FADFDB}
+
+/* 조건이 얼마나 찼나 */
+.prog{display:flex;align-items:center;gap:4px;width:100%;margin-top:3px}
+.prog .bar{flex:1;height:5px;background:#E4E6E1;border-radius:999px;overflow:hidden}
+.prog .bar i{display:block;height:100%;background:var(--gold-d);border-radius:999px;transition:width .3s}
+.prog b{font-size:9px;font-weight:800;color:var(--sub)}
+.prog.done .bar i{background:var(--ok)}
+.prog.done b{color:var(--ok)}
+.prog.big{margin:0;gap:9px}
+.prog.big .bar{height:12px;border:2px solid var(--ink)}
+.prog.big b{font-size:16px;color:var(--ink)}
+.prog.big em{font-style:normal;font-size:12px;color:var(--sub);font-weight:700}
+/* 모으는 조건 — 칸을 나눠 몇 개 모았는지 바로 보이게 */
+.prog .segs{flex:1;display:flex;gap:2px}
+.prog .segs i{
+  flex:1;height:5px;background:#E4E6E1;border-radius:2px;display:block;transition:.25s
+}
+.prog .segs i.on{background:var(--gold-d)}
+.prog.done .segs i.on{background:var(--ok)}
+.prog.big .segs{gap:3px}
+.prog.big .segs i{height:12px;border:2px solid var(--ink);border-radius:3px}
+.augInfo .p{display:flex;flex-direction:column;gap:7px;background:#F2F3F0;
+  border:2px solid var(--line);border-radius:var(--r);padding:12px 16px;font-size:13px;color:var(--sub)}
 .pc.home i{opacity:.35}
 .pc.home .w{opacity:.7}
 .pc.fin i{border-style:double;border-width:4px}
@@ -179,8 +250,20 @@ details.teacherBox .panel{margin-top:10px}
 .aug.empty{border-color:var(--line);color:var(--line);border-style:dashed;cursor:default}
 .aug.usable{background:#FDF4D8;border-color:var(--gold-d)}
 .aug.usable:hover{background:var(--gold)}
-.aug.spent{opacity:.42;text-decoration:line-through}
+/* 다 쓴 증강에는 빨간 도장 */
+.aug.spent{opacity:.5;position:relative}
+.aug.spent::after{
+  content:'다 씀';position:absolute;right:2px;top:2px;
+  border:2px solid var(--red);border-radius:999px;
+  color:var(--red);font-size:8px;font-weight:800;line-height:1;
+  padding:2px 4px;transform:rotate(-10deg);
+  background:rgba(252,252,250,.92);pointer-events:none
+}
 .aug.legend{box-shadow:inset 0 0 0 2px #F0DCA0}
+
+/* 도착 칸 고리 — 눌러서도 옮길 수 있다 */
+#board circle.dest{transition:.15s}
+#board circle.dest:hover{fill:rgba(46,158,99,.16)}
 
 /* 말판 */
 .boardBox{
@@ -203,6 +286,30 @@ details.teacherBox .panel{margin-top:10px}
 .yutRow i.flat{background:var(--ink)}
 .yutRow i.mark{position:relative}
 .yutRow i.mark::after{content:'';position:absolute;left:50%;top:50%;width:5px;height:5px;background:var(--red);border-radius:50%;transform:translate(-50%,-50%)}
+/* 구르는 중 */
+.yutRow i.tumble{animation:tumble .42s linear infinite}
+.yutRow i:nth-child(2).tumble{animation-delay:.07s}
+.yutRow i:nth-child(3).tumble{animation-delay:.14s}
+.yutRow i:nth-child(4).tumble{animation-delay:.21s}
+.yutRow i:nth-child(5).tumble{animation-delay:.28s}
+.yutRow i:nth-child(6).tumble{animation-delay:.35s}
+@keyframes tumble{
+  0%{transform:translateY(0) rotate(0) scaleX(1)}
+  25%{transform:translateY(-14px) rotate(14deg) scaleX(.25)}
+  50%{transform:translateY(-20px) rotate(-10deg) scaleX(1)}
+  75%{transform:translateY(-9px) rotate(8deg) scaleX(.4)}
+  100%{transform:translateY(0) rotate(0) scaleX(1)}
+}
+.yutRow i.land{animation:land .3s ease-out}
+@keyframes land{0%{transform:translateY(-12px)}60%{transform:translateY(2px)}100%{transform:translateY(0)}}
+.rollName.pop{animation:namePop .35s ease-out}
+@keyframes namePop{0%{transform:scale(.7);opacity:0}100%{transform:scale(1);opacity:1}}
+
+/* 내 차례 안내 */
+.act.turnOn{
+  color:var(--ink);font-weight:800;font-size:15px;
+  background:#FBF0D4;border:2px solid var(--gold-d);border-radius:999px;padding:7px 10px
+}
 .rollName{font-size:20px;font-weight:800}
 .rollSub{font-size:12px;color:var(--sub)}
 .log{
@@ -213,8 +320,21 @@ details.teacherBox .panel{margin-top:10px}
 .log div{padding:1px 0}
 
 /* 시계 */
-.clock{position:fixed;right:18px;bottom:18px;width:84px;height:84px;z-index:30;pointer-events:none}
+/* 초시계 — 화면 위, 차례 띠 옆 */
+.clock{width:76px;height:87px;flex:none;pointer-events:none;overflow:visible}
+.clock .face{fill:#FCFCFA;stroke:#6B3A2E;stroke-width:5}
+.clock .crown{fill:#6B3A2E}
+.clock .nub{stroke:#6B3A2E;stroke-width:5;stroke-linecap:round}
+.clock .hand{
+  stroke:var(--red);stroke-width:3.5;stroke-linecap:round;
+  transform-box:fill-box;transform-origin:bottom center;transition:transform .25s linear
+}
+.clock .pin{fill:#6B3A2E}
+.clock #clockNum{font-size:25px;font-weight:800;fill:var(--ink)}
 .clock.warn .face{stroke:var(--red)}
+.clock.warn #clockNum{fill:var(--red)}
+.clock.warn{animation:tickPulse .9s ease-in-out infinite}
+@keyframes tickPulse{0%,100%{transform:scale(1)}50%{transform:scale(1.09)}}
 
 /* ============================================================
    겹쳐 뜨는 창
@@ -289,6 +409,10 @@ details.teacherBox .panel{margin-top:10px}
 .augInfo .w{font-size:14px;line-height:1.55;color:#6B5E3A;background:#FBF3DC;
   border:2px solid var(--gold-d);border-radius:var(--r);padding:12px 16px}
 .augInfo .s{font-size:12.5px;color:var(--sub);font-weight:700;text-align:center}
+.augInfo .u{font-size:13.5px;font-weight:700;color:var(--sub);text-align:center}
+.askUse{border-top:2px dashed var(--line);padding-top:14px;margin-bottom:4px}
+.askUse p{font-size:19px;font-weight:800;margin-bottom:12px}
+.askUse .row{gap:10px;max-width:320px;margin:0 auto}
 
 /* 특수 승리 알림 */
 .winFlow{display:flex;align-items:center;justify-content:center;gap:26px;margin:22px 0}
@@ -352,7 +476,10 @@ details.teacherBox .panel{margin-top:10px}
   .boardBox{order:-1}
   #board{max-height:58vh}
   .log{max-height:130px}
-  .clock{width:64px;height:64px;right:10px;bottom:10px}
+  .clock{width:54px;height:62px}
+  .topBar{gap:10px}
+  .turnStrip{gap:8px}
+  .turnStrip .tp.now i{width:22px;height:22px}
 }
 @media(max-width:620px){
   .augPick{grid-template-columns:1fr}
